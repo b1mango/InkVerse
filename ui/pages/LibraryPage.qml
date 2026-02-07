@@ -17,11 +17,31 @@ Item {
 
     // Need a function to trigger refresh
     function refresh(books) {
-        if(!model) return;
+        if (!model) {
+            console.warn("[LibraryPage] refresh: model is null")
+            return
+        }
+        if (!books || !books.length) {
+            console.warn("[LibraryPage] refresh: books is empty or undefined", books)
+            return
+        }
+        console.log("[LibraryPage] refresh: populating", books.length, "book(s)")
         model.clear()
         for (var i = 0; i < books.length; i++) {
-            model.append(books[i])
+            var b = books[i]
+            // Ensure all required keys exist with safe defaults
+            model.append({
+                "id":              b.id              || "",
+                "title":           b.title           || "Untitled",
+                "author":          b.author          || "",
+                "cover_path":      b.cover_path      || "",
+                "status":          b.status          || "to_read",
+                "reading_minutes": b.reading_minutes  || 0,
+                "path":            b.path            || "",
+                "format":          b.format          || "txt"
+            })
         }
+        console.log("[LibraryPage] model count:", model.count)
     }
 
     ColumnLayout {
@@ -88,22 +108,21 @@ Item {
                         anchors.margins: 0
                         spacing: 0
                         
-                        // Cover placeholder
+                        // Cover
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             Layout.margins: 12
                             Layout.bottomMargin: 0
                             radius: 8
-                            color: "#000000"
-                            opacity: 0.3
-                            
-                            Text {
-                                anchors.centerIn: parent
-                                text: title.substring(0, 1).toUpperCase()
-                                font.pixelSize: 48
-                                color: "#30ffffff"
-                                font.family: "Times New Roman"
+                            clip: true
+                            color: "transparent"
+
+                            Image {
+                                anchors.fill: parent
+                                source: cover_path ? "file:///" + cover_path : ""
+                                fillMode: Image.PreserveAspectCrop
+                                cache: false
                             }
                         }
                         
@@ -153,24 +172,48 @@ Item {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Text files (*.txt)"]
         onAccepted: {
-             if (!backend) return;
-             
+             if (!backend) { console.warn("[LibraryPage] backend not available"); return; }
+
+             // Collect selected file URLs from whichever property is populated
              var picked = []
-             if (importDialog.files && importDialog.files.length) picked = importDialog.files
-             else if (importDialog.selectedFiles && importDialog.selectedFiles.length) picked = importDialog.selectedFiles
-             else if (importDialog.fileUrls && importDialog.fileUrls.length) picked = importDialog.fileUrls
-             else if (importDialog.file) picked = [importDialog.file]
-             else if (importDialog.currentFile) picked = [importDialog.currentFile]
-             
+             if (importDialog.files && importDialog.files.length > 0) {
+                 picked = importDialog.files
+             } else if (importDialog.currentFiles && importDialog.currentFiles.length > 0) {
+                 picked = importDialog.currentFiles
+             } else if (importDialog.file && importDialog.file.toString() !== "") {
+                 picked = [importDialog.file]
+             } else if (importDialog.currentFile && importDialog.currentFile.toString() !== "") {
+                 picked = [importDialog.currentFile]
+             }
+
+             console.log("[LibraryPage] picked", picked.length, "file(s)")
+             for (var j = 0; j < picked.length; j++)
+                 console.log("  ->", picked[j])
+
              if (picked.length > 0) {
-                 var books = backend.importFiles(picked)
+                 // Convert to plain JS array of strings for reliable PySide6 interop
+                 var urls = []
+                 for (var k = 0; k < picked.length; k++)
+                     urls.push(picked[k].toString())
+
+                 var books = backend.importFiles(urls)
+                 console.log("[LibraryPage] importFiles returned", books ? books.length : "undefined")
                  root.refresh(books)
              }
         }
     }
     
     Component.onCompleted: {
-        if(backend) {
+        if (backend) {
+            backend.ensureCovers()
+            root.refresh(backend.listBooks())
+        }
+    }
+
+    Connections {
+        target: backend || null
+        function onCoversUpdated() {
+            console.log("[LibraryPage] covers updated from online, refreshing...")
             root.refresh(backend.listBooks())
         }
     }

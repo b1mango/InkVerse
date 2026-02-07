@@ -64,8 +64,10 @@ ApplicationWindow {
                     id: libPage
                     model: globalLibraryModel
                     onBookSelected: (book) => {
+                         readerPage.bookId = book.id || ""
                          readerPage.bookTitle = book.title || "Untitled"
                          readerPage.bookText = backend.readBookText(book.id)
+                         readerPage.loadChapters()
                          window.currentViewIndex = 2 // Go to Reader
                     }
                 }
