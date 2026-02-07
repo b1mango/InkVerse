@@ -10,9 +10,14 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from core.library import (
-    add_imported_txt,
+    add_imported_files,
+    delete_book,
     ensure_all_covers,
+    epub_chapters,
+    get_book,
     list_books,
+    read_epub_chapter,
+    read_epub_full,
     read_txt,
     unfetched_books,
     update_book,
@@ -105,13 +110,27 @@ class LibraryBackend(QObject):
     @Slot("QVariantList", result="QVariantList")
     def importFiles(self, urls):
         paths = [p for u in urls if (p := self._coerce_path(u))]
-        added = add_imported_txt(paths)
+        added = add_imported_files(paths)
         self._fetch_covers_async(added)
         return self._sanitize(list_books())
 
     @Slot(str, result=str)
     def readBookText(self, bookId: str) -> str:
+        book = get_book(bookId)
+        if not book:
+            return ""
+        fmt = book.get("format", "txt")
+        if fmt == "epub":
+            return read_epub_full(bookId)
         return read_txt(bookId)
+
+    @Slot(str, result="QVariantList")
+    def getChapters(self, bookId: str):
+        return epub_chapters(bookId)
+
+    @Slot(str, int, result=str)
+    def readChapter(self, bookId: str, chapterIdx: int) -> str:
+        return read_epub_chapter(bookId, chapterIdx)
 
     @Slot()
     def ensureCovers(self):
@@ -119,6 +138,16 @@ class LibraryBackend(QObject):
         pending = unfetched_books()
         if pending:
             self._fetch_covers_async(pending)
+
+    @Slot(str, result="QVariantList")
+    def deleteBook(self, bookId: str):
+        delete_book(bookId)
+        return self._sanitize(list_books())
+
+    @Slot(str, str, result="QVariantList")
+    def updateBookStatus(self, bookId: str, status: str):
+        update_book(bookId, status=status)
+        return self._sanitize(list_books())
 
 
 def main() -> int:

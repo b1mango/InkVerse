@@ -4,6 +4,7 @@ import "../components"
 
 Item {
     id: root
+    property string lang: "zh"  // Language property
     
     ColumnLayout {
         anchors.fill: parent
@@ -11,7 +12,7 @@ Item {
         spacing: 30
 
         Text {
-            text: "Good Evening, Traveler."
+            text: lang === "zh" ? "晚上好，旅人。" : "Good Evening, Traveler."
             color: "#ffffff"
             font.pixelSize: 32
             font.weight: Font.Light
@@ -30,7 +31,7 @@ Item {
                     anchors.centerIn: parent
                     spacing: 8
                     Text { text: "12.5 hrs"; color: "#fff"; font.pixelSize: 28; font.bold: true }
-                    Text { text: "Reading Time"; color: "#80ffffff"; font.pixelSize: 14 }
+                    Text { text: lang === "zh" ? "阅读时间" : "Reading Time"; color: "#80ffffff"; font.pixelSize: 14 }
                 }
             }
             
@@ -42,7 +43,7 @@ Item {
                     anchors.centerIn: parent
                     spacing: 8
                     Text { text: "4"; color: "#fff"; font.pixelSize: 28; font.bold: true }
-                    Text { text: "Books Finished"; color: "#80ffffff"; font.pixelSize: 14 }
+                    Text { text: lang === "zh" ? "完成书籍" : "Books Finished"; color: "#80ffffff"; font.pixelSize: 14 }
                 }
             }
             
@@ -55,7 +56,7 @@ Item {
             Layout.preferredHeight: 200
             
             Text {
-                text: "Activity Heatmap (Coming Soon)"
+                text: lang === "zh" ? "活动热图（即将推出）" : "Activity Heatmap (Coming Soon)"
                 anchors.centerIn: parent
                 color: "#40ffffff"
             }

@@ -1,14 +1,16 @@
-"""Book cover: algorithmic generation & online look-up."""
+"""Book cover: algorithmic generation, EPUB extraction & online look-up."""
 
 from __future__ import annotations
 
 import colorsys
 import hashlib
 import json
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree as ET
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -100,6 +102,71 @@ def generate(title: str, dest: Path) -> None:
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest, "PNG")
+
+
+# ── EPUB cover extraction ───────────────────────────────────────────
+
+
+def extract_epub_cover(epub_path: Path, dest: Path) -> bool:
+    """Try to extract the cover image from an EPUB file. Returns True on success."""
+    try:
+        with zipfile.ZipFile(epub_path) as zf:
+            # Strategy 1: look in OPF metadata for a cover image
+            cover = _epub_cover_from_opf(zf)
+            if cover:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(cover)
+                return True
+
+            # Strategy 2: find first image that looks like a cover by name
+            for name in zf.namelist():
+                low = name.lower()
+                if any(k in low for k in ("cover", "frontcover")) and low.endswith(
+                    (".jpg", ".jpeg", ".png", ".gif")
+                ):
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(zf.read(name))
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _epub_cover_from_opf(zf: zipfile.ZipFile) -> bytes | None:
+    """Parse container.xml → OPF → find cover image item."""
+    try:
+        container = ET.fromstring(zf.read("META-INF/container.xml"))
+        ns = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
+        opf_path = container.find(".//c:rootfile", ns).attrib["full-path"]
+        opf_dir = "/".join(opf_path.split("/")[:-1])
+        opf = ET.fromstring(zf.read(opf_path))
+        ns_opf = {"opf": "http://www.idpf.org/2007/opf"}
+
+        # Find cover meta → item href
+        cover_id = None
+        for meta in opf.findall(".//{http://www.idpf.org/2007/opf}meta"):
+            if meta.get("name") == "cover":
+                cover_id = meta.get("content")
+                break
+
+        if not cover_id:
+            # Some EPUBs use properties="cover-image" on manifest item
+            for item in opf.findall(".//{http://www.idpf.org/2007/opf}item"):
+                if "cover-image" in (item.get("properties") or ""):
+                    cover_id = item.get("id")
+                    break
+
+        if cover_id:
+            for item in opf.findall(".//{http://www.idpf.org/2007/opf}item"):
+                if item.get("id") == cover_id:
+                    href = item.get("href")
+                    img_path = f"{opf_dir}/{href}" if opf_dir else href
+                    data = zf.read(img_path)
+                    if len(data) > 512:
+                        return data
+    except Exception:
+        pass
+    return None
 
 
 # ── Online fetch ────────────────────────────────────────────────────

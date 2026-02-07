@@ -19,6 +19,7 @@ ApplicationWindow {
     // 0: Dashboard, 1: Library, 2: Reader, 3: Settings
     property int currentViewIndex: 0
     property bool isReading: currentViewIndex === 2
+    property string appLanguage: "zh"  // "zh" or "en"
 
     // Background (Ink Wash Gradient)
     Rectangle {
@@ -39,6 +40,7 @@ ApplicationWindow {
             Layout.fillHeight: true
             Layout.preferredWidth: 260
             visible: !window.isReading // Auto-hide on read
+            lang: window.appLanguage
             
             currentPage: getSidebarIndex(window.currentViewIndex)
             onPageSelected: (index) => {
@@ -57,17 +59,26 @@ ApplicationWindow {
 
                 // 0: Dashboard
                 DashboardPage {
+                    lang: window.appLanguage
                 }
 
                 // 1: Library
                 LibraryPage {
                     id: libPage
+                    lang: window.appLanguage
                     model: globalLibraryModel
                     onBookSelected: (book) => {
                          readerPage.bookId = book.id || ""
                          readerPage.bookTitle = book.title || "Untitled"
-                         readerPage.bookText = backend.readBookText(book.id)
-                         readerPage.loadChapters()
+                         readerPage.bookFormat = book.format || "txt"
+
+                         if (book.format === "epub") {
+                             readerPage.bookText = ""
+                             readerPage.loadChapters()
+                         } else {
+                             readerPage.bookText = backend.readBookText(book.id)
+                             readerPage.loadChapters()
+                         }
                          window.currentViewIndex = 2 // Go to Reader
                     }
                 }
@@ -81,12 +92,13 @@ ApplicationWindow {
                     }
                 }
                 
-                // 3: Settings (Placeholder)
-                Item {
-                    Text { 
-                        anchors.centerIn: parent
-                        text: "Settings (Coming Soon)"
-                        color: "white"
+                // 3: Settings
+                SettingsPage {
+                    id: settingsPage
+                    currentLanguage: window.appLanguage
+                    onLanguageChanged: (lang) => {
+                        window.appLanguage = lang
+                        libPage.refresh(backend.listBooks())
                     }
                 }
             }

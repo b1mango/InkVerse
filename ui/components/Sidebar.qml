@@ -7,6 +7,7 @@ GlassPanel {
     width: 240
     color: "#E611151a" // Slightly more opaque for sidebar
     property int currentPage: 0
+    property string lang: "zh"  // Language property
     signal pageSelected(int index)
 
     FontLoader {
@@ -21,7 +22,7 @@ GlassPanel {
 
         // Logo / Title area
         Text {
-            text: "墨界 InkVerse"
+            text: lang === "zh" ? "墨界 InkVerse" : "InkVerse"
             color: "#ffffff"
             font.pixelSize: 28
             font.weight: Font.Light
@@ -36,14 +37,14 @@ GlassPanel {
             spacing: 8
 
             NavButton {
-                text: "首页"
+                text: lang === "zh" ? "首页" : "Dashboard"
                 iconText: "space_dashboard" 
                 selected: root.currentPage === 0
                 onClicked: root.pageSelected(0)
             }
 
             NavButton {
-                text: "书库"
+                text: lang === "zh" ? "书库" : "Library"
                 iconText: "local_library" 
                 selected: root.currentPage === 1
                 onClicked: root.pageSelected(1)
@@ -58,7 +59,7 @@ GlassPanel {
             spacing: 8
 
             NavButton {
-                text: "设置"
+                text: lang === "zh" ? "设置" : "Settings"
                 iconText: "settings"
                 selected: root.currentPage === 3
                 onClicked: root.pageSelected(3)
