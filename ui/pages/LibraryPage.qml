@@ -8,28 +8,14 @@ Item {
     id: root
     signal bookSelected(var book)
     
-    // Model should be exposed from main context or passed in. 
-    // We'll trust the main window ensures 'libraryModel' is populated or we populate it here.
-    // For encapsulation, let's create our own ListModel if we can't look up, but 'libraryModel' in main.qml is easier for now.
-    // Actually, accessing parent properties is brittle. Let's refer to 'libraryModel' by id if possible, but they are in different files.
-    // Best practice: Pass model as property.
+    // Model should be exposed from main context or passed in.
     property var model
 
-    // Need a function to trigger refresh
     function refresh(books) {
-        if (!model) {
-            console.warn("[LibraryPage] refresh: model is null")
-            return
-        }
-        if (!books || !books.length) {
-            console.warn("[LibraryPage] refresh: books is empty or undefined", books)
-            return
-        }
-        console.log("[LibraryPage] refresh: populating", books.length, "book(s)")
+        if (!model || !books || !books.length) return
         model.clear()
         for (var i = 0; i < books.length; i++) {
             var b = books[i]
-            // Ensure all required keys exist with safe defaults
             model.append({
                 "id":              b.id              || "",
                 "title":           b.title           || "Untitled",
@@ -41,7 +27,6 @@ Item {
                 "format":          b.format          || "txt"
             })
         }
-        console.log("[LibraryPage] model count:", model.count)
     }
 
     ColumnLayout {
@@ -174,30 +159,21 @@ Item {
         onAccepted: {
              if (!backend) { console.warn("[LibraryPage] backend not available"); return; }
 
-             // Collect selected file URLs from whichever property is populated
              var picked = []
-             if (importDialog.files && importDialog.files.length > 0) {
+             if (importDialog.files && importDialog.files.length > 0)
                  picked = importDialog.files
-             } else if (importDialog.currentFiles && importDialog.currentFiles.length > 0) {
+             else if (importDialog.currentFiles && importDialog.currentFiles.length > 0)
                  picked = importDialog.currentFiles
-             } else if (importDialog.file && importDialog.file.toString() !== "") {
+             else if (importDialog.file && importDialog.file.toString() !== "")
                  picked = [importDialog.file]
-             } else if (importDialog.currentFile && importDialog.currentFile.toString() !== "") {
+             else if (importDialog.currentFile && importDialog.currentFile.toString() !== "")
                  picked = [importDialog.currentFile]
-             }
-
-             console.log("[LibraryPage] picked", picked.length, "file(s)")
-             for (var j = 0; j < picked.length; j++)
-                 console.log("  ->", picked[j])
 
              if (picked.length > 0) {
-                 // Convert to plain JS array of strings for reliable PySide6 interop
                  var urls = []
                  for (var k = 0; k < picked.length; k++)
                      urls.push(picked[k].toString())
-
                  var books = backend.importFiles(urls)
-                 console.log("[LibraryPage] importFiles returned", books ? books.length : "undefined")
                  root.refresh(books)
              }
         }
@@ -213,7 +189,6 @@ Item {
     Connections {
         target: backend || null
         function onCoversUpdated() {
-            console.log("[LibraryPage] covers updated from online, refreshing...")
             root.refresh(backend.listBooks())
         }
     }

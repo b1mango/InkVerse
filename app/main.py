@@ -1,6 +1,5 @@
 import sys
 from pathlib import Path
-from typing import Iterable, List
 
 from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication
@@ -48,14 +47,10 @@ class CoverWorker(QThread):
 
             if result.matched:
                 updates["doc_type"] = "book"
-                if result.cover:
-                    print(f"[InkVerse] fetched cover: {title}")
                 if result.author and not b.get("author"):
                     updates["author"] = result.author
-                    print(f"[InkVerse] found author: {title} -> {result.author}")
             else:
                 updates["doc_type"] = "document"
-                print(f"[InkVerse] no match online, treating as document: {title}")
 
             update_book(bid, **updates)
 
@@ -75,9 +70,8 @@ class LibraryBackend(QObject):
     # ── helpers ──────────────────────────────────────────────────
 
     @staticmethod
-    def _sanitize(books: List[dict]) -> List[dict]:
-        """None → empty string, back-slashes → forward slashes for QML."""
-        out: List[dict] = []
+    def _sanitize(books):
+        out = []
         for b in books:
             e = {k: ("" if v is None else v) for k, v in b.items()}
             for key in ("cover_path", "path"):
@@ -104,17 +98,14 @@ class LibraryBackend(QObject):
     # ── slots for QML ────────────────────────────────────────────
 
     @Slot(result="QVariantList")
-    def listBooks(self) -> List[dict]:
+    def listBooks(self):
         books = self._sanitize(list_books())
-        print(f"[InkVerse] listBooks -> {len(books)} book(s)")
         return books
 
     @Slot("QVariantList", result="QVariantList")
-    def importFiles(self, urls: Iterable[object]) -> List[dict]:
+    def importFiles(self, urls):
         paths = [p for u in urls if (p := self._coerce_path(u))]
-        print(f"[InkVerse] importFiles -> {len(paths)} path(s)")
         added = add_imported_txt(paths)
-        print(f"[InkVerse] added {len(added)} book(s)")
         self._fetch_covers_async(added)
         return self._sanitize(list_books())
 
@@ -124,14 +115,10 @@ class LibraryBackend(QObject):
 
     @Slot()
     def ensureCovers(self):
-        """Generate missing algorithmic covers, then fetch online for new books only."""
         ensure_all_covers()
         pending = unfetched_books()
         if pending:
-            print(f"[InkVerse] {len(pending)} book(s) need online lookup")
             self._fetch_covers_async(pending)
-        else:
-            print("[InkVerse] all books already fetched, skipping online lookup")
 
 
 def main() -> int:

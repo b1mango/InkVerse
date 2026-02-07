@@ -2,38 +2,23 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-DEFAULT_APP_DIR = Path.home() / ".inkverse"
-
-FILES = {
-    "metadata": "metadata.json",
-    "reading_logs": "reading_logs.json",
-    "settings": "settings.json",
-}
+BASE_DIR = Path.home() / ".inkverse"
 
 
-def ensure_storage(base_dir: Path | None = None) -> Dict[str, Path]:
-    base = base_dir or DEFAULT_APP_DIR
-    base.mkdir(parents=True, exist_ok=True)
-
-    imports_dir = base / "imports"
-    cache_dir = base / "cache"
-    imports_dir.mkdir(exist_ok=True)
-    cache_dir.mkdir(exist_ok=True)
-
-    paths = {name: base / filename for name, filename in FILES.items()}
-    for path in paths.values():
-        if not path.exists():
-            path.write_text("{}", encoding="utf-8")
-
-    paths["imports"] = imports_dir
-    paths["cache"] = cache_dir
-    return paths
+def ensure_storage() -> Dict[str, Path]:
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    imports = BASE_DIR / "imports"
+    cache = BASE_DIR / "cache"
+    imports.mkdir(exist_ok=True)
+    cache.mkdir(exist_ok=True)
+    meta = BASE_DIR / "metadata.json"
+    if not meta.exists():
+        meta.write_text("{}", encoding="utf-8")
+    return {"metadata": meta, "imports": imports, "cache": cache}
 
 
 def load_json(path: Path) -> Dict[str, Any]:
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
 def save_json(path: Path, data: Dict[str, Any]) -> None:
