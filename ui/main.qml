@@ -10,7 +10,7 @@ ApplicationWindow {
     height: 850
     visible: true
     title: "InkVerse"
-    color: "#000000"
+    color: window.appTheme === "ink" ? "#e0e2e5" : "#ece4d8"
 
     // Global Data
     ListModel { id: globalLibraryModel }
@@ -20,14 +20,22 @@ ApplicationWindow {
     property int currentViewIndex: 0
     property bool isReading: currentViewIndex === 2
     property string appLanguage: "zh"  // "zh" or "en"
+    property string appTheme: "ink"    // "ink" or "cream"
+    property string appFont: "汉仪行楷简"   // UI display font
+    // Font weight: reduce for inherently bold fonts
+    property int appFontBoldW:  appFont === "HYXinHaiXingKaiW" ? Font.Medium  : Font.Bold
+    property int appFontNormW:  appFont === "HYXinHaiXingKaiW" ? Font.Light   : Font.Normal
 
-    // Background (Ink Wash Gradient)
-    Rectangle {
+    // ── Background (theme-dependent, hidden during reading) ──
+    Image {
+        id: bgImage
         anchors.fill: parent
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: "#1a1f26" } // Deep Blue-Grey
-            GradientStop { position: 1.0; color: "#0f1216" } // Almost Black
-        }
+        source: window.appTheme === "ink"
+            ? "../assets/images/background.png"
+            : "../assets/images/bg_landscape.svg"
+        fillMode: Image.PreserveAspectCrop
+        opacity: window.appTheme === "ink" ? 0.25 : 0.5
+        visible: !window.isReading
     }
 
     RowLayout {
@@ -41,10 +49,15 @@ ApplicationWindow {
             Layout.preferredWidth: 260
             visible: !window.isReading // Auto-hide on read
             lang: window.appLanguage
+            theme: window.appTheme
+            appFont: window.appFont
+            appFontBoldW: window.appFontBoldW
+            appFontNormW: window.appFontNormW
             
             currentPage: getSidebarIndex(window.currentViewIndex)
             onPageSelected: (index) => {
                 window.currentViewIndex = index
+                if (index === 0) dashPage.refreshDashboard()
             }
         }
 
@@ -59,36 +72,66 @@ ApplicationWindow {
 
                 // 0: Dashboard
                 DashboardPage {
+                    id: dashPage
                     lang: window.appLanguage
+                    appFont: window.appFont
+                    appFontBoldW: window.appFontBoldW
+                    appFontNormW: window.appFontNormW
+                    onOpenBook: (book) => {
+                        readerPage.bookId = book.id || ""
+                        readerPage.bookTitle = book.title || "Untitled"
+                        readerPage.bookFormat = book.format || "txt"
+                        if (book.format === "pdf") {
+                            readerPage.bookText = ""
+                            readerPage.loadChapters()
+                        } else if (book.format === "epub" || book.format === "mobi") {
+                            readerPage.bookText = ""
+                            readerPage.loadChapters()
+                        } else {
+                            readerPage.bookText = backend.readBookText(book.id)
+                            readerPage.loadChapters()
+                        }
+                        readerPage._startSession()
+                        window.currentViewIndex = 2
+                    }
                 }
 
                 // 1: Library
                 LibraryPage {
                     id: libPage
                     lang: window.appLanguage
+                    appFont: window.appFont
+                    appFontBoldW: window.appFontBoldW
+                    appFontNormW: window.appFontNormW
                     model: globalLibraryModel
                     onBookSelected: (book) => {
                          readerPage.bookId = book.id || ""
                          readerPage.bookTitle = book.title || "Untitled"
                          readerPage.bookFormat = book.format || "txt"
 
-                         if (book.format === "epub") {
+                         if (book.format === "pdf") {
+                             readerPage.bookText = ""
+                             readerPage.loadChapters()
+                         } else if (book.format === "epub" || book.format === "mobi") {
                              readerPage.bookText = ""
                              readerPage.loadChapters()
                          } else {
                              readerPage.bookText = backend.readBookText(book.id)
                              readerPage.loadChapters()
                          }
-                         window.currentViewIndex = 2 // Go to Reader
+                         readerPage._startSession()
+                         window.currentViewIndex = 2
                     }
                 }
 
                 // 2: Reader
                 ReaderPage {
                     id: readerPage
+                    lang: window.appLanguage
                     onBackRequested: {
-                        window.currentViewIndex = 1 // Return to library
-                        libPage.refresh(backend.listBooks()) // Refresh in case
+                        window.currentViewIndex = 1
+                        libPage.refresh(backend.listBooks())
+                        dashPage.refreshDashboard()
                     }
                 }
                 
@@ -96,9 +139,25 @@ ApplicationWindow {
                 SettingsPage {
                     id: settingsPage
                     currentLanguage: window.appLanguage
+                    currentTheme: window.appTheme
+                    currentFont: window.appFont
                     onLanguageChanged: (lang) => {
                         window.appLanguage = lang
                         libPage.refresh(backend.listBooks())
+                    }
+                    onThemeChanged: (theme) => {
+                        window.appTheme = theme
+                        // Auto-set default font per theme
+                        if (theme === "ink") {
+                            window.appFont = "汉仪行楷简"
+                            settingsPage.currentFont = "汉仪行楷简"
+                        } else {
+                            window.appFont = "HYXinHaiXingKaiW"
+                            settingsPage.currentFont = "HYXinHaiXingKaiW"
+                        }
+                    }
+                    onFontChanged: (font) => {
+                        window.appFont = font
                     }
                 }
             }

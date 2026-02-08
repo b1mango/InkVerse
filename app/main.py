@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QFontDatabase, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -10,16 +10,41 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from core.library import (
+    add_book_to_folder,
     add_imported_files,
+    create_folder,
+    delete_annotation,
     delete_book,
+    delete_folder,
     ensure_all_covers,
     epub_chapters,
+    generate_weekly_report,
     get_book,
+    get_book_reading_detail,
+    get_dashboard_stats,
+    get_reading_heatmap,
+    get_reading_stats_by_period,
+    get_recent_books,
     list_books,
+    list_folders,
+    load_annotations,
+    mobi_chapters,
+    pdf_page_count,
+    pdf_chapters,
     read_epub_chapter,
     read_epub_full,
+    read_mobi_chapter,
+    read_mobi_full,
+    read_pdf_chapter,
+    read_pdf_text,
     read_txt,
+    record_reading_session,
+    remove_book_from_folder,
+    rename_folder,
+    render_pdf_page,
+    save_annotation,
     unfetched_books,
+    update_annotation,
     update_book,
 )
 from core.storage import ensure_storage
@@ -122,15 +147,48 @@ class LibraryBackend(QObject):
         fmt = book.get("format", "txt")
         if fmt == "epub":
             return read_epub_full(bookId)
+        elif fmt == "pdf":
+            return read_pdf_text(bookId)
+        elif fmt == "mobi":
+            return read_mobi_full(bookId)
         return read_txt(bookId)
 
     @Slot(str, result="QVariantList")
     def getChapters(self, bookId: str):
-        return epub_chapters(bookId)
+        book = get_book(bookId)
+        if not book:
+            return []
+        fmt = book.get("format", "txt")
+        if fmt == "epub":
+            return epub_chapters(bookId)
+        elif fmt == "pdf":
+            return pdf_chapters(bookId)
+        elif fmt == "mobi":
+            return mobi_chapters(bookId)
+        return []
 
     @Slot(str, int, result=str)
     def readChapter(self, bookId: str, chapterIdx: int) -> str:
-        return read_epub_chapter(bookId, chapterIdx)
+        book = get_book(bookId)
+        if not book:
+            return ""
+        fmt = book.get("format", "txt")
+        if fmt == "epub":
+            return read_epub_chapter(bookId, chapterIdx)
+        elif fmt == "pdf":
+            return read_pdf_chapter(bookId, chapterIdx)
+        elif fmt == "mobi":
+            return read_mobi_chapter(bookId, chapterIdx)
+        return ""
+
+    @Slot(str, int, float, result=str)
+    def renderPdfPage(self, bookId: str, pageNum: int, zoom: float = 2.0) -> str:
+        """Render a PDF page as an image and return the file path."""
+        return render_pdf_page(bookId, pageNum, zoom)
+
+    @Slot(str, result=int)
+    def getPdfPageCount(self, bookId: str) -> int:
+        return pdf_page_count(bookId)
 
     @Slot()
     def ensureCovers(self):
@@ -149,12 +207,101 @@ class LibraryBackend(QObject):
         update_book(bookId, status=status)
         return self._sanitize(list_books())
 
+    # ── Dashboard / reading stats ────────────────────────────────
+
+    @Slot(result="QVariant")
+    def getDashboardStats(self):
+        return get_dashboard_stats()
+
+    @Slot(result="QVariantList")
+    def getReadingHeatmap(self):
+        return get_reading_heatmap(182)  # ~6 months
+
+    @Slot(str, float)
+    def recordReadingSession(self, bookId: str, minutes: float):
+        record_reading_session(bookId, minutes)
+
+    @Slot(result="QVariantList")
+    def getRecentBooks(self):
+        return get_recent_books(6)
+
+    # ── Folder management ────────────────────────────────────────
+
+    @Slot(result="QVariantList")
+    def listFolders(self):
+        return list_folders()
+
+    @Slot(str, result="QVariantList")
+    def createFolder(self, name: str):
+        return create_folder(name)
+
+    @Slot(str, result="QVariantList")
+    def deleteFolder(self, folderId: str):
+        return delete_folder(folderId)
+
+    @Slot(str, str, result="QVariantList")
+    def renameFolder(self, folderId: str, name: str):
+        return rename_folder(folderId, name)
+
+    @Slot(str, str, result="QVariantList")
+    def addBookToFolder(self, bookId: str, folderId: str):
+        return add_book_to_folder(bookId, folderId)
+
+    @Slot(str, str, result="QVariantList")
+    def removeBookFromFolder(self, bookId: str, folderId: str):
+        return remove_book_from_folder(bookId, folderId)
+
+    # ── Multi-dimensional stats / Weekly report ──────────────────
+
+    @Slot(result="QVariant")
+    def getReadingStatsByPeriod(self):
+        return get_reading_stats_by_period()
+
+    @Slot(str, result="QVariant")
+    def getBookReadingDetail(self, bookId: str):
+        return get_book_reading_detail(bookId)
+
+    @Slot(result="QVariant")
+    def generateWeeklyReport(self):
+        return generate_weekly_report()
+
+    # ── Annotations / Highlights ───────────────────────────────────
+
+    @Slot(str, int, result="QVariantList")
+    def loadAnnotations(self, bookId: str, chapterIndex: int = -1):
+        return load_annotations(bookId, chapterIndex)
+
+    @Slot(str, int, int, int, str, str, str, result="QVariantList")
+    def saveAnnotation(self, bookId: str, chapterIndex: int, start: int,
+                       end: int, text: str, color: str, comment: str):
+        return save_annotation(bookId, chapterIndex, start, end, text, color, comment)
+
+    @Slot(str, str, str, result="QVariantList")
+    def updateAnnotationComment(self, bookId: str, annotationId: str, comment: str):
+        return update_annotation(bookId, annotationId, comment=comment)
+
+    @Slot(str, str, str, result="QVariantList")
+    def updateAnnotationColor(self, bookId: str, annotationId: str, color: str):
+        return update_annotation(bookId, annotationId, color=color)
+
+    @Slot(str, str, result="QVariantList")
+    def deleteAnnotation(self, bookId: str, annotationId: str):
+        return delete_annotation(bookId, annotationId)
+
 
 def main() -> int:
     app = QGuiApplication(sys.argv)
     engine = QQmlApplicationEngine()
 
     ensure_storage()
+
+    # Load custom fonts from assets/fonts
+    fonts_dir = ROOT_DIR / "assets" / "fonts"
+    if fonts_dir.exists():
+        for font_file in fonts_dir.glob("*.ttf"):
+            QFontDatabase.addApplicationFont(str(font_file))
+        for font_file in fonts_dir.glob("*.otf"):
+            QFontDatabase.addApplicationFont(str(font_file))
 
     # Keep a Python reference so GC doesn't collect the QObject
     backend = LibraryBackend()

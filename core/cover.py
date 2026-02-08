@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
 from PIL import Image, ImageDraw, ImageFont
+import fitz  # PyMuPDF
 
 W, H = 300, 420  # cover dimensions
 _UA = {"User-Agent": "InkVerse/0.1"}
@@ -167,6 +168,42 @@ def _epub_cover_from_opf(zf: zipfile.ZipFile) -> bytes | None:
     except Exception:
         pass
     return None
+
+
+# ── PDF cover extraction ────────────────────────────────────────────
+
+
+def extract_pdf_cover(pdf_path: Path, dest: Path) -> bool:
+    """Try to extract the first page as cover from a PDF file. Returns True on success."""
+    try:
+        doc = fitz.open(str(pdf_path))
+        if len(doc) == 0:
+            return False
+        
+        # Render first page as image
+        page = doc[0]
+        # Render at 2x resolution for better quality, then resize
+        mat = fitz.Matrix(2, 2)
+        pix = page.get_pixmap(matrix=mat)
+        
+        # Convert to PIL Image
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        # Resize to standard cover dimensions while maintaining aspect ratio
+        img.thumbnail((W, H), Image.Resampling.LANCZOS)
+        
+        # Create a centered image on white background
+        final = Image.new("RGB", (W, H), (255, 255, 255))
+        x = (W - img.width) // 2
+        y = (H - img.height) // 2
+        final.paste(img, (x, y))
+        
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        final.save(dest, "PNG")
+        doc.close()
+        return True
+    except Exception:
+        return False
 
 
 # ── Online fetch ────────────────────────────────────────────────────

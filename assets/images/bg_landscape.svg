@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 600" width="1920" height="600">
+<defs>
+  <filter id="mist" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="18"/></filter>
+  <filter id="mist2" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="30"/></filter>
+  <filter id="sharp" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="3"/></filter>
+  <filter id="mid" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="8"/></filter>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#f0eeed"/>
+    <stop offset="0.5" stop-color="#e6e4e2"/>
+    <stop offset="1" stop-color="#dcdad8"/>
+  </linearGradient>
+  <linearGradient id="fogBot" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#e6e4e2" stop-opacity="0"/>
+    <stop offset="0.6" stop-color="#eae8e6" stop-opacity="0.7"/>
+    <stop offset="1" stop-color="#eeecea" stop-opacity="0.95"/>
+  </linearGradient>
+</defs>
+<rect width="1920" height="600" fill="url(#sky)"/>
+<!-- Far mountains -->
+<g filter="url(#mist2)" opacity="0.35">
+  <path d="M0,400 Q100,250 200,320 Q350,180 500,280 Q600,200 700,250 Q850,140 1000,230 Q1100,180 1200,260 Q1350,150 1500,240 Q1650,190 1800,280 Q1900,230 1920,260 L1920,600 L0,600Z" fill="#888480"/>
+</g>
+<!-- Mid-far mountains -->
+<g filter="url(#mist)" opacity="0.45">
+  <path d="M-50,420 Q80,280 200,350 Q280,250 400,300 Q520,180 650,290 Q750,220 900,310 Q1000,200 1150,280 Q1280,190 1400,300 Q1520,230 1650,310 Q1780,250 1920,330 L1920,600 L-50,600Z" fill="#6e6a68"/>
+</g>
+<!-- Middle mountains -->
+<g filter="url(#mid)" opacity="0.55">
+  <path d="M0,500 Q120,330 250,400 Q370,280 500,360 Q580,290 700,350 Q830,240 960,340 Q1050,270 1180,350 Q1320,250 1450,340 Q1560,280 1700,370 Q1830,300 1920,370 L1920,600 L0,600Z" fill="#4e4a48"/>
+</g>
+<!-- Near-mid mountains -->
+<g filter="url(#sharp)" opacity="0.65">
+  <path d="M-30,520 Q100,370 220,430 Q320,330 450,400 Q560,310 680,380 Q780,300 920,390 Q1060,290 1200,380 Q1330,310 1480,400 Q1600,330 1760,410 Q1870,360 1920,400 L1920,600 L-30,600Z" fill="#383432"/>
+</g>
+<!-- Nearest peaks -->
+<g filter="url(#sharp)" opacity="0.7">
+  <path d="M-50,560 Q60,420 180,470 Q280,380 400,440 Q500,370 630,430 Q720,370 850,440 Q980,350 1100,420 Q1220,360 1350,430 Q1480,370 1600,440 Q1740,380 1860,450 Q1920,420 1920,600 L-50,600Z" fill="#2a2828"/>
+</g>
+<!-- Cloud/mist -->
+<g filter="url(#mist2)" opacity="0.6">
+  <ellipse cx="300" cy="380" rx="250" ry="40" fill="#e6e4e2"/>
+  <ellipse cx="800" cy="350" rx="300" ry="50" fill="#eae8e6"/>
+  <ellipse cx="1400" cy="370" rx="280" ry="45" fill="#e6e4e2"/>
+  <ellipse cx="1100" cy="400" rx="200" ry="35" fill="#eae8e6"/>
+</g>
+<g filter="url(#mist)" opacity="0.4">
+  <ellipse cx="500" cy="440" rx="350" ry="30" fill="#eeecea"/>
+  <ellipse cx="1200" cy="430" rx="300" ry="35" fill="#eeecea"/>
+  <ellipse cx="1700" cy="450" rx="250" ry="25" fill="#eae8e6"/>
+</g>
+<rect y="400" width="1920" height="200" fill="url(#fogBot)"/>
+</svg>

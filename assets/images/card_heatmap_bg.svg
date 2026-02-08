@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400">
+<defs>
+  <filter id="hf" x="-15%" y="-15%" width="130%" height="130%"><feGaussianBlur stdDeviation="20"/></filter>
+  <filter id="hf2" x="-15%" y="-15%" width="130%" height="130%"><feGaussianBlur stdDeviation="10"/></filter>
+  <linearGradient id="hg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#dcdad8" stop-opacity="0"/>
+    <stop offset="0.6" stop-color="#e0dedc" stop-opacity="0.2"/>
+    <stop offset="1" stop-color="#eeecea" stop-opacity="0.5"/>
+  </linearGradient>
+</defs>
+<ellipse cx="200" cy="300" rx="250" ry="80" fill="#8a8580" opacity="0.1" filter="url(#hf)"/>
+<ellipse cx="600" cy="320" rx="220" ry="70" fill="#908880" opacity="0.08" filter="url(#hf)"/>
+<ellipse cx="400" cy="280" rx="300" ry="60" fill="#6e6a68" opacity="0.07" filter="url(#hf)"/>
+<path d="M0,350 Q80,240 180,290 Q280,200 380,270 Q480,190 580,260 Q680,210 780,280 L800,400 L0,400Z" fill="#4e4a48" opacity="0.06" filter="url(#hf2)"/>
+<path d="M0,370 Q120,280 250,320 Q380,240 500,310 Q620,250 750,320 L800,400 L0,400Z" fill="#383432" opacity="0.05" filter="url(#hf2)"/>
+<path d="M50,200 Q200,170 350,190 Q500,160 650,185 Q750,175 800,180" stroke="#908880" stroke-width="20" fill="none" filter="url(#hf)" opacity="0.06"/>
+<rect y="250" width="800" height="150" fill="url(#hg)"/>
+<path d="M680,340 Q700,310 720,320 Q740,300 730,330 Q725,340 710,335" stroke="#383432" stroke-width="2" fill="none" filter="url(#hf2)" opacity="0.12"/>
+</svg>
