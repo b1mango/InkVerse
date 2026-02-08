@@ -1,11 +1,14 @@
+import os
 import sys
+import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QFontDatabase, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+_bundle_root = getattr(sys, "_MEIPASS", None)
+ROOT_DIR = Path(_bundle_root) if _bundle_root else Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -294,6 +297,27 @@ def main() -> int:
     engine = QQmlApplicationEngine()
 
     ensure_storage()
+    log_path = ensure_storage()["cache"].parent / "inkverse.log"
+
+    def _log(msg: str) -> None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(msg + "\n")
+        except Exception:
+            pass
+
+    def _log_warnings(warnings):
+        for w in warnings:
+            _log(f"QML warning: {w.toString()}")
+
+    engine.warnings.connect(_log_warnings)
+
+    # Ensure QML import path when bundled
+    qml_import_path = ROOT_DIR / "PySide6" / "qml"
+    if qml_import_path.exists():
+        os.environ.setdefault("QML2_IMPORT_PATH", str(qml_import_path))
+        engine.addImportPath(str(qml_import_path))
 
     # Load custom fonts from assets/fonts
     fonts_dir = ROOT_DIR / "assets" / "fonts"
@@ -308,9 +332,14 @@ def main() -> int:
     engine.rootContext().setContextProperty("backend", backend)
 
     qml_path = ROOT_DIR / "ui" / "main.qml"
-    engine.load(str(qml_path))
+    try:
+        engine.load(QUrl.fromLocalFile(str(qml_path)))
+    except Exception:
+        _log("Failed to load QML: " + str(qml_path))
+        _log(traceback.format_exc())
 
     if not engine.rootObjects():
+        _log("No root objects loaded. QML failed to initialize.")
         return 1
 
     return app.exec()
