@@ -1,3 +1,5 @@
+
+
 # 墨界 InkVerse
 
 > 「毛玻璃态 × 水墨东方」全格式轻量电子书阅读器
@@ -75,7 +77,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 # 安装依赖
-pip install PySide6 ebooklib PyMuPDF mobi
+pip install PySide6 ebooklib PyMuPDF mobi Pillow
 
 # 启动应用
 python -m app.main
