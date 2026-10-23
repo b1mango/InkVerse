@@ -16,20 +16,44 @@ Rectangle {
     signal backRequested()
 
     // ── Reading session tracking ────────────────────────────────
-    property real _sessionStartTime: 0
+    property string _storageError: ""
+    property string _textError: ""
+    property string _textEncoding: "auto"
+    readonly property var _textEncodings: ["auto", "utf-8-sig", "gb18030", "big5", "utf-16", "utf-16-le", "utf-16-be"]
 
     function _startSession() {
-        _sessionStartTime = Date.now()
+        _storageError = ""
+        backend.startReadingSession(bookId)
     }
 
     function _endSession() {
-        if (_sessionStartTime > 0 && bookId && backend) {
-            var elapsed = (Date.now() - _sessionStartTime) / 60000  // minutes
-            if (elapsed >= 0.1) {
-                backend.recordReadingSession(bookId, elapsed)
-            }
-            _sessionStartTime = 0
+        return backend.endReadingSession()
+    }
+
+    function loadTextBook() {
+        var result = backend.readTextBook(bookId)
+        _textEncoding = result.encoding || "auto"
+        _textError = result.error || ""
+        bookText = result.text || ""
+        jumpToPage(0)
+    }
+
+    function changeTextEncoding(encoding) {
+        var result = backend.changeTextEncoding(bookId, encoding)
+        _textError = result.error || ""
+        if (!_textError) {
+            _textEncoding = result.encoding
+            bookText = result.text
+            jumpToPage(0)
         }
+        encodingChoice.currentIndex = Qt.binding(function() {
+            return root._textEncodings.indexOf(root._textEncoding)
+        })
+    }
+
+    Connections {
+        target: backend
+        function onStorageError(message) { root._storageError = message }
     }
 
     // ── Reading settings ────────────────────────────────────────
@@ -432,7 +456,7 @@ Rectangle {
                 width: 70; height: 30; radius: 6
                 color: backMa.containsMouse ? "#15000000" : "transparent"
                 Text { anchors.centerIn: parent; text: "← " + (lang === "zh" ? "返回" : "Back"); color: root.textColor; opacity: 0.6; font.pixelSize: 14 }
-                MouseArea { id: backMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { root._endSession(); root.backRequested() } }
+                MouseArea { id: backMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root._endSession()) root.backRequested() } }
             }
 
             Rectangle {
@@ -594,13 +618,40 @@ Rectangle {
         visible: false; z: 20
         anchors.top: topBar.bottom
         anchors.right: parent.right; anchors.rightMargin: 20
-        width: 300; height: settingsCol.implicitHeight + 40
+        width: 300
+        height: Math.min(settingsCol.implicitHeight + 40, Math.max(100, root.height - topBar.height - 20))
         radius: 10; color: _panelBg; border.color: _panelBorder
+
+        ScrollView {
+            id: settingsScroll
+            anchors.fill: parent; anchors.margins: 20
+            clip: true
+            contentWidth: availableWidth
+            contentHeight: settingsCol.implicitHeight
 
         Column {
             id: settingsCol
-            anchors.fill: parent; anchors.margins: 20
+            width: settingsScroll.availableWidth
             spacing: 20
+
+            Row {
+                visible: root.bookFormat === "txt"
+                width: parent.width
+                spacing: 12
+                Text {
+                    text: lang === "zh" ? "文字编码" : "Text encoding"
+                    color: root.textColor; font.pixelSize: 13
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ComboBox {
+                    id: encodingChoice
+                    width: parent.width - x
+                    model: [lang === "zh" ? "自动识别" : "Automatic", "UTF-8", "GB18030 / GBK", "Big5", "UTF-16 (BOM)", "UTF-16 LE", "UTF-16 BE"]
+                    currentIndex: root._textEncodings.indexOf(root._textEncoding)
+                    onActivated: root.changeTextEncoding(root._textEncodings[currentIndex])
+                    Accessible.name: lang === "zh" ? "文字编码" : "Text encoding"
+                }
+            }
 
             // ── Background ──
             Text { text: lang === "zh" ? "阅读背景" : "Background"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
@@ -815,6 +866,7 @@ Rectangle {
                 }
             }
         }
+        }
     }
 
     // Click outside to close panels
@@ -825,9 +877,23 @@ Rectangle {
     }
 
     // ── Reading Area ────────────────────────────────────────────
+    Text {
+        id: readError
+        anchors.top: topBar.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: Math.max(0, parent.width - 40)
+        text: root._storageError || (root.bookFormat === "txt" ? root._textError : "")
+        visible: text !== ""
+        wrapMode: Text.Wrap
+        horizontalAlignment: Text.AlignHCenter
+        color: root.textColor
+        font.pixelSize: 14
+        z: 12
+    }
     Item {
         id: readingArea
-        anchors.top: topBar.bottom; anchors.bottom: parent.bottom
+        anchors.top: topBar.bottom; anchors.topMargin: readError.visible ? readError.height + 12 : 0
+        anchors.bottom: parent.bottom
         anchors.left: parent.left; anchors.right: parent.right
 
         // ═══════════════ PDF IMAGE MODE ═══════════════

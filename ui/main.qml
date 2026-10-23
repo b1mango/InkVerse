@@ -11,6 +11,7 @@ ApplicationWindow {
     visible: true
     title: "InkVerse"
     color: window.appTheme === "ink" ? "#e0e2e5" : "#ece4d8"
+    onClosing: function(close) { close.accepted = backend.endReadingSession() }
 
     // Global Data
     ListModel { id: globalLibraryModel }
@@ -88,7 +89,7 @@ ApplicationWindow {
                             readerPage.bookText = ""
                             readerPage.loadChapters()
                         } else {
-                            readerPage.bookText = backend.readBookText(book.id)
+                            readerPage.loadTextBook()
                             readerPage.loadChapters()
                         }
                         readerPage._startSession()
@@ -116,7 +117,7 @@ ApplicationWindow {
                              readerPage.bookText = ""
                              readerPage.loadChapters()
                          } else {
-                             readerPage.bookText = backend.readBookText(book.id)
+                             readerPage.loadTextBook()
                              readerPage.loadChapters()
                          }
                          readerPage._startSession()

@@ -10,7 +10,8 @@ import mobi
 from ebooklib import epub
 
 from .cover import extract_epub_cover, extract_pdf_cover, generate as generate_cover
-from .storage import ensure_storage, load_json, save_json
+from .storage import ensure_storage, load_json, save_json, serialized
+from .text_encoding import decode_text
 
 
 def _load_metadata() -> dict:
@@ -73,6 +74,7 @@ def unfetched_books() -> List[dict]:
     return [b for b in list_books() if not b.get("meta_fetched")]
 
 
+@serialized
 def update_book(book_id: str, **fields) -> None:
     data = _load_metadata()
     for book in data["books"]:
@@ -82,20 +84,27 @@ def update_book(book_id: str, **fields) -> None:
             return
 
 
+@serialized
 def delete_book(book_id: str) -> None:
     """Remove a book from the library and delete its files."""
     data = _load_metadata()
     book = next((b for b in data["books"] if b.get("id") == book_id), None)
     if not book:
         return
+    remaining = [b for b in data["books"] if b.get("id") != book_id]
+    referenced = {
+        Path(b[key]).resolve()
+        for b in remaining for key in ("path", "cover_path") if b.get(key)
+    }
     for key in ("path", "cover_path"):
         p = book.get(key, "")
-        if p and Path(p).exists():
+        if p and Path(p).resolve() not in referenced and Path(p).exists():
             Path(p).unlink(missing_ok=True)
     data["books"] = [b for b in data["books"] if b.get("id") != book_id]
     _save_metadata(data)
 
 
+@serialized
 def add_imported_files(paths: Iterable[Path]) -> List[dict]:
     """Import TXT, EPUB, PDF, and MOBI files into the library."""
     imports_dir = ensure_storage()["imports"]
@@ -107,14 +116,13 @@ def add_imported_files(paths: Iterable[Path]) -> List[dict]:
         ext = src.suffix.lower()
         if ext not in (".txt", ".epub", ".pdf", ".mobi"):
             continue
-        dest = imports_dir / src.name
-        shutil.copy2(src, dest)
-
         bid = str(uuid4())
+        dest = imports_dir / f"{bid}{ext}"
+        shutil.copy2(src, dest)
         cover = covers / f"{bid}.png"
         fmt = ext.lstrip(".")
 
-        title = dest.stem
+        title = src.stem
         author = ""
 
         if ext == ".epub":
@@ -188,6 +196,7 @@ def add_imported_files(paths: Iterable[Path]) -> List[dict]:
 add_imported_txt = add_imported_files
 
 
+@serialized
 def ensure_all_covers() -> None:
     covers = _covers_dir()
     data = _load_metadata()
@@ -210,7 +219,19 @@ def read_txt(book_id: str) -> str:
     path = Path(str(book.get("path", "")))
     if not path.exists():
         return ""
-    return path.read_text(encoding="utf-8", errors="replace")
+    text, _ = decode_text(path.read_bytes(), book.get("text_encoding", "auto"))
+    return text
+
+
+@serialized
+def set_text_encoding(book_id: str, encoding: str) -> str:
+    """Validate the chosen decoder before persisting it or replacing reader text."""
+    book = get_book(book_id)
+    if not book or book.get("format", "txt") != "txt":
+        raise ValueError("TXT book not found")
+    text, _ = decode_text(Path(book["path"]).read_bytes(), encoding)
+    update_book(book_id, text_encoding=encoding)
+    return text
 
 
 # ── EPUB helpers ─────────────────────────────────────────────────────
@@ -742,6 +763,7 @@ def _save_reading_stats(data: dict) -> None:
     save_json(stats_path, data)
 
 
+@serialized
 def record_reading_session(book_id: str, minutes: float) -> None:
     """Record a reading session with date and duration."""
     from datetime import date
@@ -750,7 +772,7 @@ def record_reading_session(book_id: str, minutes: float) -> None:
     stats.setdefault("sessions", []).append({
         "date": today,
         "book_id": book_id,
-        "minutes": round(minutes, 1),
+        "minutes": minutes,
     })
     _save_reading_stats(stats)
 
@@ -840,6 +862,7 @@ def list_folders() -> List[dict]:
     return data.get("folders", [])
 
 
+@serialized
 def create_folder(name: str) -> List[dict]:
     """Create a new folder and return updated folders list."""
     data = _load_metadata()
@@ -854,6 +877,7 @@ def create_folder(name: str) -> List[dict]:
     return data["folders"]
 
 
+@serialized
 def delete_folder(folder_id: str) -> List[dict]:
     """Delete a folder (does not delete the books inside)."""
     data = _load_metadata()
@@ -862,6 +886,7 @@ def delete_folder(folder_id: str) -> List[dict]:
     return data["folders"]
 
 
+@serialized
 def rename_folder(folder_id: str, name: str) -> List[dict]:
     """Rename a folder."""
     data = _load_metadata()
@@ -872,6 +897,7 @@ def rename_folder(folder_id: str, name: str) -> List[dict]:
     return data.get("folders", [])
 
 
+@serialized
 def add_book_to_folder(book_id: str, folder_id: str) -> List[dict]:
     """Add a book to a folder."""
     data = _load_metadata()
@@ -883,6 +909,7 @@ def add_book_to_folder(book_id: str, folder_id: str) -> List[dict]:
     return data.get("folders", [])
 
 
+@serialized
 def remove_book_from_folder(book_id: str, folder_id: str) -> List[dict]:
     """Remove a book from a folder."""
     data = _load_metadata()
@@ -1074,6 +1101,7 @@ def load_annotations(book_id: str, chapter_index: int = -1) -> List[dict]:
     return annotations
 
 
+@serialized
 def save_annotation(
     book_id: str,
     chapter_index: int,
@@ -1106,6 +1134,7 @@ def save_annotation(
     return data["annotations"]
 
 
+@serialized
 def update_annotation(book_id: str, annotation_id: str, **fields) -> List[dict]:
     """Update an annotation (comment, color, etc.)."""
     path = _ann_path(book_id)
@@ -1117,6 +1146,7 @@ def update_annotation(book_id: str, annotation_id: str, **fields) -> List[dict]:
     return data.get("annotations", [])
 
 
+@serialized
 def delete_annotation(book_id: str, annotation_id: str) -> List[dict]:
     """Delete an annotation."""
     path = _ann_path(book_id)

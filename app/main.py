@@ -3,7 +3,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QFontDatabase, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -46,11 +46,14 @@ from core.library import (
     rename_folder,
     render_pdf_page,
     save_annotation,
+    set_text_encoding,
     unfetched_books,
     update_annotation,
     update_book,
 )
 from core.storage import ensure_storage
+from core.reading import ReadingSession
+from core.text_encoding import decode_text
 
 
 # ── Background cover & metadata fetcher ────────────────────────────
@@ -95,10 +98,72 @@ class CoverWorker(QThread):
 
 class LibraryBackend(QObject):
     coversUpdated = Signal()
+    storageError = Signal(str)
 
     def __init__(self):
         super().__init__()
         self._worker: CoverWorker | None = None
+        self._reading = ReadingSession(record_reading_session)
+        self._reading_timer = QTimer(self)
+        self._reading_timer.setInterval(60000)
+        self._reading_timer.timeout.connect(self.checkpointReadingSession)
+
+    @Slot(str, result=bool)
+    def startReadingSession(self, bookId: str) -> bool:
+        try:
+            self._reading.start(bookId)
+            self._reading_timer.start()
+            return True
+        except (OSError, ValueError):
+            self.storageError.emit("阅读时长保存失败，请检查磁盘空间和写入权限后重试。")
+            return False
+
+    @Slot(result=bool)
+    def checkpointReadingSession(self) -> bool:
+        try:
+            self._reading.flush()
+            self.storageError.emit("")
+            return True
+        except (OSError, ValueError):
+            self.storageError.emit("阅读时长保存失败，请检查磁盘空间和写入权限后重试。")
+            return False
+
+    @Slot(result=bool)
+    def endReadingSession(self) -> bool:
+        try:
+            self._reading.end()
+            self._reading_timer.stop()
+            self.storageError.emit("")
+            return True
+        except (OSError, ValueError):
+            self.storageError.emit("阅读时长保存失败，请检查磁盘空间和写入权限后重试。")
+            return False
+
+    @Slot(str, result="QVariant")
+    def readTextBook(self, bookId: str):
+        book = get_book(bookId)
+        if not book:
+            return {"error": "书籍不存在。"}
+        encoding = book.get("text_encoding", "auto")
+        try:
+            text, detected = decode_text(Path(book["path"]).read_bytes(), encoding)
+            return {"text": text, "encoding": encoding, "detected": detected, "error": ""}
+        except UnicodeError:
+            return {"error": "无法用当前编码读取，请在阅读设置中选择其他编码。", "encoding": encoding}
+        except ValueError:
+            return {"error": "无法识别文字编码，请在阅读设置中选择编码。", "encoding": encoding}
+        except OSError:
+            return {"error": "无法读取书籍文件，请检查文件是否存在及读取权限。", "encoding": encoding}
+
+    @Slot(str, str, result="QVariant")
+    def changeTextEncoding(self, bookId: str, encoding: str):
+        try:
+            text = set_text_encoding(bookId, encoding)
+            return {"text": text, "encoding": encoding, "error": ""}
+        except (UnicodeError, ValueError):
+            return {"error": "无法用此编码读取，已保留原来的正文与编码。"}
+        except OSError:
+            return {"error": "读取或保存编码失败，请检查文件和写入权限后重试。"}
 
     # ── helpers ──────────────────────────────────────────────────
 
@@ -329,6 +394,7 @@ def main() -> int:
 
     # Keep a Python reference so GC doesn't collect the QObject
     backend = LibraryBackend()
+    app.aboutToQuit.connect(backend.endReadingSession)
     engine.rootContext().setContextProperty("backend", backend)
 
     qml_path = ROOT_DIR / "ui" / "main.qml"
