@@ -686,7 +686,7 @@ Rectangle {
                         { label: "小赖字体", val: "Xiaolai" }
                     ]
                     Rectangle {
-                        width: 84; height: 30; radius: 6
+                        width: (parent.width - 2 * parent.spacing) / 3; height: 30; radius: 6
                         color: root.fontFamily === modelData.val ? _activeBg : "transparent"
                         border.color: _panelBorder
                         Text {
