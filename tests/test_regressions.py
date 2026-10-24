@@ -148,6 +148,16 @@ class LibraryTests(unittest.TestCase):
                 self.assertEqual(self.library.set_text_encoding(book["id"], encoding), "繁體中文")
                 self.assertEqual(self.library.read_txt(book["id"]), "繁體中文")
 
+    def test_windows_line_endings_normalized_without_rewriting_book(self):
+        raw_text = "第一段\r\n\r\n第二段\r末段\n"
+        book = self.import_text(text=raw_text, encoding="gb18030")
+        expected = "第一段\n\n第二段\n末段\n"
+        self.assertEqual(self.library.read_txt(book["id"]), expected)
+        self.assertEqual(self.library.set_text_encoding(book["id"], "gb18030"), expected)
+        original = raw_text.encode("gb18030")
+        self.assertEqual((self.root / "book.txt").read_bytes(), original)
+        self.assertEqual(Path(book["path"]).read_bytes(), original)
+
     def test_session_checkpoints_reach_disk_without_rounding_loss(self):
         current = [0.0]
         session = ReadingSession(self.library.record_reading_session, lambda: current[0])
@@ -162,6 +172,21 @@ class LibraryTests(unittest.TestCase):
 
 
 class EncodingTests(unittest.TestCase):
+    def test_universal_newlines_for_auto_explicit_and_bom_decoding(self):
+        raw_text = "第一段\r\n\r\n第二段\r末段\n"
+        expected = "第一段\n\n第二段\n末段\n"
+        cases = (
+            ("utf-8", "auto"), ("gb18030", "auto"), ("big5", "big5"),
+            ("gb18030", "gb18030"), ("utf-8-sig", "utf-8-sig"),
+            ("utf-8-sig", "auto"), ("utf-16", "auto"), ("utf-32", "auto"),
+            ("utf-16", "utf-16"), ("utf-16-le", "utf-16-le"),
+            ("utf-16-be", "utf-16-be"),
+        )
+        for encoded_as, selected in cases:
+            with self.subTest(encoded_as=encoded_as, selected=selected):
+                text, _ = decode_text(raw_text.encode(encoded_as), selected)
+                self.assertEqual(text, expected)
+
     def test_bom_and_common_encodings(self):
         for encoding in ("utf-8", "utf-8-sig", "utf-16", "utf-32", "gb18030"):
             with self.subTest(encoding=encoding):

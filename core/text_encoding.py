@@ -6,6 +6,12 @@ ENCODINGS = ("auto", "utf-8-sig", "gb18030", "big5", "utf-16", "utf-16-le", "utf
 
 
 def decode_text(data: bytes, encoding: str = "auto") -> tuple[str, str]:
+    text, detected = _decode_bytes(data, encoding)
+    # Match the universal-newline behavior of the former Path.read_text reader.
+    return text.replace("\r\n", "\n").replace("\r", "\n"), detected
+
+
+def _decode_bytes(data: bytes, encoding: str) -> tuple[str, str]:
     if encoding not in ENCODINGS:
         raise ValueError("Unsupported text encoding")
     if encoding != "auto":

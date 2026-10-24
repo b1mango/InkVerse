@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { execFileSync } = require('node:child_process');
 const source = fs.readFileSync(path.join(__dirname, '../ui/pages/ReaderPage.qml'), 'utf8');
 
 function qmlFunction(name) {
@@ -51,4 +52,21 @@ test('successful encoding choice replaces text and resets pagination', () => {
   assert.equal(context._textError, '');
   assert.equal(context.encodingChoice.currentIndex(), 1);
   assert.deepEqual(pages, [0]);
+});
+
+test('decoded Windows paragraphs retain adjustable QML paragraph spacing', () => {
+  const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+  const texts = JSON.parse(execFileSync(python, ['-B', '-c', `
+import json
+from core.text_encoding import decode_text
+text = "第一段\\r\\n\\r\\n第二段\\r末段\\n"
+cases = [("utf-8", "auto"), ("gb18030", "gb18030"), ("utf-16", "auto")]
+print(json.dumps([decode_text(text.encode(codec), selected)[0] for codec, selected in cases]))
+`], { cwd: path.join(__dirname, '..'), encoding: 'utf8' }));
+  const context = vm.createContext({});
+  vm.runInContext(qmlFunction('_spacedText'), context);
+  for (const text of texts) {
+    assert.equal(context._spacedText(text, 0), '第一段\n\n第二段\n末段\n');
+    assert.equal(context._spacedText(text, 4), '第一段\n\n\n\n\n\n第二段\n末段\n');
+  }
 });
