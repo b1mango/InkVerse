@@ -20,6 +20,7 @@ a = Analysis(
         (str(ROOT / "ui"), "ui"),
         (str(ROOT / "assets" / "fonts"), "assets/fonts"),
         (str(ROOT / "assets" / "icons"), "assets/icons"),
+        (str(ROOT / "assets" / "images"), "assets/images"),
     ],
     hiddenimports=["core.cover", "core.library", "core.reading", "core.settings", "core.storage", "core.text_encoding"],
     excludes=["tkinter", "pytest", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore"],

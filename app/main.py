@@ -48,6 +48,9 @@ from core.library import (
     render_pdf_page,
     save_annotation,
     save_reading_progress,
+    toggle_bookmark,
+    list_bookmarks,
+    delete_bookmark,
     set_text_encoding,
     unfetched_books,
     update_annotation,
@@ -289,14 +292,45 @@ class LibraryBackend(QObject):
         progress = book.get("progress")
         return progress if isinstance(progress, dict) else {}
 
-    @Slot(str, int, float, result=bool)
-    def saveReadingProgress(self, bookId: str, chapter: int, ratio: float) -> bool:
+    @Slot(str, int, float, float, result=bool)
+    def saveReadingProgress(self, bookId: str, chapter: int, ratio: float, percent: float) -> bool:
         try:
-            save_reading_progress(bookId, chapter, ratio)
+            save_reading_progress(bookId, chapter, ratio, percent)
             return True
         except (OSError, ValueError):
             self.storageError.emit("阅读位置保存失败，请检查磁盘空间和写入权限后重试。")
             return False
+
+    @Slot(str, result="QVariantList")
+    def listBookmarks(self, bookId: str):
+        return list_bookmarks(bookId)
+
+    @Slot(str, int, int, str, int, int, result="QVariantList")
+    def toggleBookmark(self, bookId: str, chapter: int, char: int, excerpt: str, pageStart: int, pageEnd: int):
+        try:
+            return toggle_bookmark(bookId, chapter, char, excerpt, pageStart, pageEnd)
+        except (OSError, ValueError):
+            self.storageError.emit("书签保存失败，请检查磁盘空间和写入权限后重试。")
+            return list_bookmarks(bookId)
+
+    @Slot(str, str, result="QVariantList")
+    def deleteBookmark(self, bookId: str, bookmarkId: str):
+        return delete_bookmark(bookId, bookmarkId)
+
+    @Slot(str)
+    def revealBookFile(self, bookId: str):
+        """Show the library copy of a book in Finder / Explorer."""
+        import subprocess
+        book = get_book(bookId) or {}
+        path = book.get("path", "")
+        if not path or not Path(path).exists():
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", str(Path(path))])
+        else:
+            subprocess.Popen(["xdg-open", str(Path(path).parent)])
 
     @Slot(str, result="QVariantList")
     def deleteBook(self, bookId: str):
@@ -390,6 +424,24 @@ class LibraryBackend(QObject):
         return delete_annotation(bookId, annotationId)
 
 
+def system_reduce_motion() -> bool:
+    """The OS "reduce motion" accessibility switch (macOS) or disabled client-area animation (Windows)."""
+    try:
+        if sys.platform == "darwin":
+            import subprocess
+            out = subprocess.run(["defaults", "read", "com.apple.universalaccess", "reduceMotion"],
+                                 capture_output=True, text=True, timeout=2)
+            return out.stdout.strip() == "1"
+        if sys.platform == "win32":
+            import ctypes
+            enabled = ctypes.c_bool(True)
+            ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0)  # SPI_GETCLIENTAREAANIMATION
+            return not enabled.value
+    except Exception:
+        return False
+    return False
+
+
 def _run_smoke_test(app, engine, backend, out_dir: Path, warnings: list) -> None:
     """Packaging check: show home, library and the first book, save screenshots, then quit.
 
@@ -401,11 +453,14 @@ def _run_smoke_test(app, engine, backend, out_dir: Path, warnings: list) -> None
     out_dir.mkdir(parents=True, exist_ok=True)
     window = engine.rootObjects()[0]
     books = backend.listBooks()
-    steps = [("home", lambda: window.setProperty("currentViewIndex", 0)),
-             ("library", lambda: window.setProperty("currentViewIndex", 1))]
+    def go(key):
+        return lambda: QMetaObject.invokeMethod(window, "navigate", Q_ARG("QVariant", key))
+
+    steps = [("home", go("now")), ("library", go("all"))]
     if books:
         first = {"id": books[0]["id"], "title": books[0]["title"], "format": books[0]["format"]}
-        steps.append(("reader", lambda: QMetaObject.invokeMethod(window, "openBook", Q_ARG("QVariant", first))))
+        steps.append(("reader", lambda: QMetaObject.invokeMethod(
+            window, "openBook", Q_ARG("QVariant", first), Q_ARG("QVariant", None))))
 
     def run(index=0):
         if index == len(steps):
@@ -466,6 +521,7 @@ def main() -> int:
     app.aboutToQuit.connect(backend.endReadingSession)
     engine.rootContext().setContextProperty("backend", backend)
     engine.rootContext().setContextProperty("appVersion", __version__)
+    engine.rootContext().setContextProperty("systemReduceMotion", system_reduce_motion())
 
     qml_path = ROOT_DIR / "ui" / "main.qml"
     try:

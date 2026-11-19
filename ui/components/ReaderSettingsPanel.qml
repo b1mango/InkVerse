@@ -31,56 +31,6 @@ Rectangle {
             width: scroller.availableWidth
             spacing: 16
 
-            // ── TXT encoding ──
-            ColumnLayout {
-                Layout.fillWidth: true
-                visible: reader.bookFormat === "txt"
-                spacing: 6
-                Label { text: zh("文字编码", "Text encoding") }
-                ComboBox {
-                    id: encodingChoice
-                    objectName: "encodingChoice"
-                    Layout.fillWidth: true
-                    implicitHeight: 34
-                    model: [zh("自动识别", "Automatic"), "UTF-8", "GB18030 / GBK", "Big5", "UTF-16 (BOM)", "UTF-16 LE", "UTF-16 BE"]
-                    currentIndex: reader._textEncodings.indexOf(reader._textEncoding)
-                    onActivated: reader.changeTextEncoding(reader._textEncodings[currentIndex])
-                    Accessible.name: zh("文字编码", "Text encoding")
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.fontSmall
-                    Connections {
-                        target: panel.reader
-                        function on_TextEncodingChanged() { encodingChoice.currentIndex = panel.reader._textEncodings.indexOf(panel.reader._textEncoding) }
-                    }
-                    background: Rectangle {
-                        radius: Theme.radiusM
-                        color: panel.p.bg
-                        border.color: encodingChoice.visualFocus ? panel.p.accent : panel.p.border
-                        border.width: encodingChoice.visualFocus ? 2 : 1
-                    }
-                    contentItem: Text {
-                        leftPadding: 12
-                        text: encodingChoice.displayText
-                        color: panel.p.text
-                        font: encodingChoice.font
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    indicator: LucideIcon {
-                        x: encodingChoice.width - width - 10
-                        y: (encodingChoice.height - height) / 2
-                        name: "chevron-down"; size: 15; color: panel.p.textSecondary
-                    }
-                    delegate: ItemDelegate {
-                        width: encodingChoice.width
-                        height: 32
-                        highlighted: encodingChoice.highlightedIndex === index
-                        contentItem: Text { text: modelData; color: panel.p.text; font: encodingChoice.font; verticalAlignment: Text.AlignVCenter }
-                        background: Rectangle { color: highlighted ? panel.p.surfaceHover : "transparent"; radius: Theme.radiusS }
-                    }
-                    popup.background: Rectangle { color: panel.p.surface; border.color: panel.p.border; radius: Theme.radiusM }
-                }
-            }
-
             // ── Background ──
             ColumnLayout {
                 Layout.fillWidth: true
@@ -226,6 +176,55 @@ Rectangle {
                         { label: zh("原始", "Actual"), value: "original" }
                     ]
                     onActivated: (v) => reader.setPreference("pdf_fit_mode", v)
+                }
+            }
+            // ── TXT encoding ──
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: reader.bookFormat === "txt"
+                spacing: 6
+                Label { text: zh("文字编码", "Text encoding") }
+                ComboBox {
+                    id: encodingChoice
+                    objectName: "encodingChoice"
+                    Layout.fillWidth: true
+                    implicitHeight: 34
+                    model: [zh("自动识别", "Automatic"), "UTF-8", "GB18030 / GBK", "Big5", "UTF-16 (BOM)", "UTF-16 LE", "UTF-16 BE"]
+                    currentIndex: reader._textEncodings.indexOf(reader._textEncoding)
+                    onActivated: reader.changeTextEncoding(reader._textEncodings[currentIndex])
+                    Accessible.name: zh("文字编码", "Text encoding")
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.fontSmall
+                    Connections {
+                        target: panel.reader
+                        function on_TextEncodingChanged() { encodingChoice.currentIndex = panel.reader._textEncodings.indexOf(panel.reader._textEncoding) }
+                    }
+                    background: Rectangle {
+                        radius: Theme.radiusM
+                        color: panel.p.bg
+                        border.color: encodingChoice.visualFocus ? panel.p.accent : panel.p.border
+                        border.width: encodingChoice.visualFocus ? 2 : 1
+                    }
+                    contentItem: Text {
+                        leftPadding: 12
+                        text: encodingChoice.displayText
+                        color: panel.p.text
+                        font: encodingChoice.font
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    indicator: LucideIcon {
+                        x: encodingChoice.width - width - 10
+                        y: (encodingChoice.height - height) / 2
+                        name: "chevron-down"; size: 15; color: panel.p.textSecondary
+                    }
+                    delegate: ItemDelegate {
+                        width: encodingChoice.width
+                        height: 32
+                        highlighted: encodingChoice.highlightedIndex === index
+                        contentItem: Text { text: modelData; color: panel.p.text; font: encodingChoice.font; verticalAlignment: Text.AlignVCenter }
+                        background: Rectangle { color: highlighted ? panel.p.surfaceHover : "transparent"; radius: Theme.radiusS }
+                    }
+                    popup.background: Rectangle { color: panel.p.surface; border.color: panel.p.border; radius: Theme.radiusM }
                 }
             }
         }

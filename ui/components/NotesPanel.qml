@@ -9,22 +9,24 @@ Rectangle {
     property Item reader
     readonly property QtObject p: reader._palette
     readonly property string lang: reader.lang
+    property bool embedded: false       // inside ReaderSidebar: no own frame or title
     function zh(a, b) { return lang === "zh" ? a : b }
 
     width: 340
     radius: Theme.radiusL
-    color: p.surface
-    border.color: p.border
+    color: embedded ? "transparent" : p.surface
+    border.color: embedded ? "transparent" : p.border
 
     MouseArea { anchors.fill: parent }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
+        anchors.margins: panel.embedded ? 0 : 14
         spacing: 10
 
         RowLayout {
             Layout.fillWidth: true
+            visible: !panel.embedded
             Text {
                 Layout.fillWidth: true
                 text: zh("笔记", "Notes")
@@ -125,7 +127,7 @@ Rectangle {
                         spacing: 0
                         Text {
                             Layout.fillWidth: true
-                            text: reader.chapterTitle(note.ann ? note.ann.chapter_index : -1)
+                            text: reader.annotationPlace(note.ann)
                             color: panel.p.textTertiary
                             font.family: Theme.uiFont
                             font.pixelSize: 11

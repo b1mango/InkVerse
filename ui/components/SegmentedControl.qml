@@ -35,12 +35,12 @@ Rectangle {
                 readonly property bool selected: root.value === modelData.value
                 width: root.fill ? (row.width - (root.options.length - 1) * row.spacing) / root.options.length
                                  : implicitWidth
-                implicitWidth: segLabel.implicitWidth + (modelData.icon ? 22 : 0) + 24
+                implicitWidth: (modelData.label ? segLabel.implicitWidth + 24 : 16) + (modelData.icon ? 22 : 0)
                 height: root.segmentHeight
                 hoverEnabled: true
                 focusPolicy: Qt.StrongFocus
                 checkable: false
-                Accessible.name: modelData.label
+                Accessible.name: modelData.a11y || modelData.label
                 Accessible.role: Accessible.RadioButton
                 Accessible.checked: selected
                 onClicked: root.activated(modelData.value)

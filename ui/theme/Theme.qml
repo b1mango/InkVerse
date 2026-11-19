@@ -15,8 +15,8 @@ QtObject {
 
     readonly property QtObject light: QtObject {
         readonly property color bg: "#F4F5F3"
-        readonly property color sidebar: "#ECEEEB"
-        readonly property color surface: "#FBFBFA"
+        readonly property color sidebar: "#EDEFEC"
+        readonly property color surface: "#FFFFFF"
         readonly property color surfaceHover: "#EEF0ED"
         readonly property color sunken: "#E7EAE6"
         readonly property color border: "#DCE0DB"
@@ -119,6 +119,15 @@ QtObject {
     readonly property int pagePadding: 40
 
     // ── Motion: felt, not watched ──
-    readonly property int fast: 120
-    readonly property int base: 180
+    // One curve for everything that moves (crisp ease-out), three durations, exits ~25 % shorter.
+    // When the OS asks for reduced motion every duration becomes 0: states still change, nothing travels.
+    property bool reduceMotion: false
+    readonly property int durFast: reduceMotion ? 0 : 140     // hover, press, toggles
+    readonly property int durBase: reduceMotion ? 0 : 220     // menus, panels, page turns
+    readonly property int durSlow: reduceMotion ? 0 : 380     // opening a book, view changes
+    readonly property int durExit: reduceMotion ? 0 : 160
+    readonly property var easeOut: [0.22, 1, 0.36, 1, 1, 1]   // cubic-bezier(0.22, 1, 0.36, 1)
+    readonly property var easeInOut: [0.65, 0, 0.35, 1, 1, 1]
+    readonly property int fast: durFast
+    readonly property int base: durBase
 }

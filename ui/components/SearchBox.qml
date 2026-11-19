@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import "../theme"
 
-/*  SearchField – 常驻搜索框，Esc 清空，带清除按钮  */
+/*  SearchBox – 常驻搜索框，Esc 清空，带清除按钮  */
 TextField {
     id: field
     property string accessibleName: placeholderText

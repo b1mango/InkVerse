@@ -10,6 +10,8 @@ from core.storage import ensure_storage, load_json, save_json, serialized
 DEFAULTS: Dict[str, Any] = {
     "theme": "system",
     "language": "zh",
+    "library_view": "grid",
+    "library_sort": "recent",
     "reading": {
         "font_family": "LXGW WenKai",
         "font_size": 18,
@@ -17,7 +19,7 @@ DEFAULTS: Dict[str, Any] = {
         "paragraph_spacing": 0,
         "reading_mode": "paginated",
         "dual_page": False,
-        "background": "paper",
+        "background": "auto",
         "pdf_fit_mode": "fit_page",
     },
 }
@@ -25,8 +27,10 @@ DEFAULTS: Dict[str, Any] = {
 _CHOICES = {
     "theme": {"system", "light", "dark"},
     "language": {"zh", "en"},
+    "library_view": {"grid", "list"},
+    "library_sort": {"recent", "title", "author", "added"},
     "reading_mode": {"paginated", "scroll"},
-    "background": {"paper", "sepia", "mist", "bamboo", "night"},
+    "background": {"auto", "paper", "sepia", "mist", "bamboo", "night"},
     "pdf_fit_mode": {"fit_page", "fit_width", "original"},
 }
 _RANGES = {"font_size": (14, 28), "page_margin": (10, 120), "paragraph_spacing": (0, 10)}
@@ -62,7 +66,7 @@ def _clean(raw: Any) -> Dict[str, Any]:
     clean = copy.deepcopy(DEFAULTS)
     if not isinstance(raw, dict):
         return clean
-    for key in ("theme", "language"):
+    for key in ("theme", "language", "library_view", "library_sort"):
         if raw.get(key) in _CHOICES[key]:
             clean[key] = raw[key]
     clean["reading"] = _clean_reading(raw.get("reading"))
@@ -87,7 +91,7 @@ def save_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in patch.items():
             if key == "reading" and isinstance(value, dict):
                 merged["reading"].update(value)
-            elif key in ("theme", "language"):
+            elif key in ("theme", "language", "library_view", "library_sort"):
                 merged[key] = value
     clean = _clean(merged)
     save_json(_settings_path(), clean)

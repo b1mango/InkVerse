@@ -69,9 +69,10 @@ Rectangle {
         bookId = book.id || ""
         bookTitle = book.title || "Untitled"
         _annotationMode = false
-        _notesVisible = false
-        tocPanel.visible = false
+        _sidebarVisible = false
         settingsPanel.visible = false
+        _chromeVisible = true
+        chromeTimer.restart()
         _clearSelection()
         _pendingRestore = backend.getReadingProgress(bookId) || null
         if (bookFormat === "txt") {
@@ -82,6 +83,7 @@ Rectangle {
             loadChapters()
         }
         _restoreChapter()
+        _loadBookmarks()
         _startSession()
         root.forceActiveFocus()
     }
@@ -120,8 +122,9 @@ Rectangle {
 
     function saveProgress() {
         if (!bookId || _pendingRestore || !backend) return
-        if (bookFormat === "pdf") backend.saveReadingProgress(bookId, pdfFlickable.currentPdfPage, 0)
-        else backend.saveReadingProgress(bookId, currentChapter, _positionRatio())
+        var whole = progressBar.progress
+        if (bookFormat === "pdf") backend.saveReadingProgress(bookId, pdfFlickable.currentPdfPage, 0, whole)
+        else backend.saveReadingProgress(bookId, currentChapter, _positionRatio(), whole)
     }
 
     Timer { id: progressSaveTimer; interval: 800; onTriggered: root.saveProgress() }
@@ -135,7 +138,7 @@ Rectangle {
     }
 
     // ── Reading preferences (shared by every book) ──────────────
-    property string bgKey: "paper"
+    property string bgKey: "auto"          // auto = paper in light appearance, night in dark
     property int fontSize: 18
     property string fontFamily: "LXGW WenKai"
     property int pageMargin: 96
@@ -144,9 +147,9 @@ Rectangle {
     property int paragraphSpacing: 0
     property string pdfFitMode: "fit_page"
     property real pdfZoom: 1.0
-    property bool _progressBarVisible: false
 
     readonly property var bgPresets: [
+        { key: "auto",   name: zh("自动", "Auto"),  bg: Theme.dark ? "#121414" : "#FAFAF7", fg: Theme.dark ? "#C8D0CC" : "#1F2322" },
         { key: "paper",  name: zh("素纸", "Paper"), bg: "#FAFAF7", fg: "#1F2322" },
         { key: "sepia",  name: zh("暖褐", "Sepia"), bg: "#F3EBDA", fg: "#3B3125" },
         { key: "mist",   name: zh("烟灰", "Mist"),  bg: "#ECEFED", fg: "#222826" },
@@ -159,7 +162,7 @@ Rectangle {
     }
     readonly property string bgColor: _preset(bgKey).bg
     readonly property string textColor: _preset(bgKey).fg
-    readonly property bool _isDark: bgKey === "night"
+    readonly property bool _isDark: bgKey === "night" || (bgKey === "auto" && Theme.dark)
     readonly property QtObject _palette: _isDark ? Theme.night : Theme.light
 
     function applyPreferences(r) {
@@ -210,7 +213,7 @@ Rectangle {
         if (readingMode === "paginated")
             _anchorChar = paginatedContainer.posAt(_displayPage * paginatedContainer._colsPerPage, 0, 0)
         else
-            _anchorChar = scrollTextEdit.positionAt(pageMargin + 1, scrollFlickable.contentY + scrollTextEdit.topPadding + 2)
+            _anchorChar = scrollTextEdit.positionAt(_textMargin + 1, scrollFlickable.contentY + scrollTextEdit.topPadding + 2)
     }
 
     function _reflow() {
@@ -221,7 +224,7 @@ Rectangle {
 
     Timer {
         id: reflowTimer
-        interval: 60
+        interval: 140          // after the 80 ms margin debounce has settled the new column width
         onTriggered: {
             if (root.readingMode === "paginated") {
                 root.jumpToPage(paginatedContainer.pageOf(root._anchorChar))
@@ -240,7 +243,6 @@ Rectangle {
     property bool _annotationMode: false
     property var _annotations: []            // all for current book
     property var _chapterAnnotations: []     // filtered for current chapter
-    property bool _notesVisible: false
     property int _selStart: -1
     property int _selEnd: -1
     property string _selText: ""
@@ -385,6 +387,15 @@ Rectangle {
     }
     Timer { id: flashTimer; interval: 1600; onTriggered: { root._flashAnnotationId = ""; root._refreshHighlightRects() } }
 
+    // Where a highlight sits: chapter title, or the share of the text for books without chapters
+    function annotationPlace(ann) {
+        if (!ann) return ""
+        var title = chapterTitle(ann.chapter_index)
+        if (title) return title
+        var idx = _annotationOffset(ann)
+        return idx >= 0 && displayText.length > 0 ? zh("约在全文 ", "About ") + Math.max(1, Math.round(idx / displayText.length * 100)) + "%" : ""
+    }
+
     function chapterTitle(index) {
         if (index >= 0 && index < chapterModel.count) return chapterModel.get(index).title
         return ""
@@ -450,15 +461,7 @@ Rectangle {
     }
 
     // Auto-hide progress bar after 4s
-    Timer {
-        id: progressAutoHide
-        interval: 4000; repeat: false
-        onTriggered: root._progressBarVisible = false
-    }
-    on_ProgressBarVisibleChanged: {
-        if (_progressBarVisible) progressAutoHide.restart()
-        else progressAutoHide.stop()
-    }
+    // Chrome (top bar and progress) hides on its own; see chromeTimer
 
     // ── Chapter markers for progress bar ────────────────────────
     property var _chapterMarkers: {
@@ -493,13 +496,23 @@ Rectangle {
 
     function _spacedText(raw, spacing) {
         if (!raw) return ""
-        // spacing 0 = tight (2 newlines), each step adds 1 newline, 10 = 12 newlines
-        var nlCount = 2 + spacing  // 0→2, 1→3, 2→4, ... 10→12
+        // Indented text (most Chinese TXT) reads like a printed book with no blank line between
+        // paragraphs at spacing 0; otherwise a blank line separates them. Each step adds a line.
+        var paras = raw.split(/\n{2,}/)
+        var indented = 0
+        for (var k = 0; k < Math.min(paras.length, 200); k++) if (/^(\u3000|\s{2,})/.test(paras[k])) indented++
+        var tight = spacing === 0 && paras.length > 1 && indented / Math.min(paras.length, 200) > 0.6
+        var nlCount = tight ? 1 : 2 + spacing
         var join = ""
         for (var i = 0; i < nlCount; i++) join += "\n"
         return raw.replace(/\n{2,}/g, join)
     }
     property string displayText: _spacedText(bookText, paragraphSpacing)
+
+    // Comfortable measure: about 38 characters per line at any window width; the margin setting is
+    // a minimum, wide windows centre the column instead of stretching lines across the screen
+    readonly property real _textMargin: Math.max(pageMargin,
+        ((readingMode === "paginated" && dualPage ? readingArea.width / 2 : readingArea.width) - fontSize * 38) / 2)
 
     // ── Paginated state ─────────────────────────────────────────
     property int _pageIndex: 0
@@ -649,13 +662,98 @@ Rectangle {
     SequentialAnimation {
         id: slideAnim
         property int direction: -1  // -1 = slide left (next), 1 = slide right (prev)
-        NumberAnimation { target: root; property: "_slideOffset"; from: 0; to: slideAnim.direction * readingArea.width; duration: 150; easing.type: Easing.InQuad }
+        // A short slide with a fade: the old page leaves, the new one settles in. Reduced motion: instant.
+        readonly property real distance: readingArea.width * 0.12
+        NumberAnimation { target: root; property: "_slideOffset"; from: 0; to: slideAnim.direction * slideAnim.distance; duration: Theme.reduceMotion ? 0 : 110; easing.type: Easing.InCubic }
         ScriptAction { script: { root._displayPage = root._pageIndex } }
-        NumberAnimation { target: root; property: "_slideOffset"; from: -slideAnim.direction * readingArea.width; to: 0; duration: 200; easing.type: Easing.OutCubic }
+        NumberAnimation { target: root; property: "_slideOffset"; from: -slideAnim.direction * slideAnim.distance; to: 0; duration: Theme.durBase; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.easeOut }
     }
 
 
-    // ── Keyboard handling ───────────────────────────────────────
+    // ── Immersive chrome: bars fade away while reading, return near the edges or on any key ──
+    property bool _chromeVisible: true
+    property bool _sidebarVisible: false
+    property string _sidebarTab: "toc"
+    readonly property bool _notesVisible: _sidebarVisible && _sidebarTab === "notes"
+    readonly property bool _anyPanel: _sidebarVisible || settingsPanel.visible
+    property alias chapters: chapterModel
+
+    function showChrome() { _chromeVisible = true; chromeTimer.restart() }
+    function openSidebar(tab) { _sidebarTab = tab; _sidebarVisible = true; showChrome() }
+    function toggleSidebar(tab) {
+        if (_sidebarVisible && _sidebarTab === tab) _sidebarVisible = false
+        else openSidebar(tab)
+    }
+    function closePanels() { _sidebarVisible = false; settingsPanel.visible = false; root.forceActiveFocus() }
+
+    Timer {
+        id: chromeTimer
+        interval: 2600
+        onTriggered: if (!root._anyPanel && !topHover.hovered && !bottomHover.hovered && !annotationToolbar.visible && !highlightMenu.visible)
+                         root._chromeVisible = false
+    }
+    HoverHandler {
+        id: pointer
+        onPointChanged: if (point.position.y < 64 || point.position.y > root.height - 96) root.showChrome()
+    }
+
+    // ── Bookmarks ───────────────────────────────────────────────
+    property var _bookmarks: []
+    function _loadBookmarks() { _bookmarks = bookId ? (backend.listBookmarks(bookId) || []) : [] }
+
+    // Character range [start, end) shown right now, within the current chapter (PDF: the page)
+    function _visibleRange() {
+        if (bookFormat === "pdf") return { chapter: pdfFlickable.currentPdfPage, start: 0, end: 1 }
+        if (readingMode === "paginated") {
+            var cols = paginatedContainer._colsPerPage
+            var start = paginatedContainer.posAt(_displayPage * cols, 0, 0)
+            var end = _displayPage + 1 < _totalPages ? paginatedContainer.posAt((_displayPage + 1) * cols, 0, 0) : displayText.length + 1
+            return { chapter: currentChapter, start: start, end: Math.max(end, start + 1) }
+        }
+        var s = scrollTextEdit.positionAt(_textMargin + 1, scrollFlickable.contentY + scrollTextEdit.topPadding + 2)
+        var e = scrollTextEdit.positionAt(scrollTextEdit.width - _textMargin - 1, scrollFlickable.contentY + scrollFlickable.height) + 1
+        return { chapter: currentChapter, start: s, end: Math.max(e, s + 1) }
+    }
+    readonly property bool pageBookmarked: {
+        var deps = [_bookmarks, _displayPage, _totalPages, currentChapter, scrollFlickable.contentY, pdfFlickable.currentPdfPage, readingMode]
+        if (!bookId || deps.length === 0) return false
+        var r = _visibleRange()
+        for (var i = 0; i < _bookmarks.length; i++) {
+            var m = _bookmarks[i]
+            if (m.chapter === r.chapter && m.char >= r.start && m.char < r.end) return true
+        }
+        return false
+    }
+    function toggleBookmark() {
+        if (!bookId) return
+        var r = _visibleRange()
+        var excerpt = bookFormat === "pdf" ? zh("第 " + (r.chapter + 1) + " 页", "Page " + (r.chapter + 1))
+            : displayText.substr(r.start, 48).replace(/\s+/g, " ").trim()
+        _bookmarks = backend.toggleBookmark(bookId, r.chapter, r.start, excerpt, r.start, r.end) || []
+        toast.show(pageBookmarked ? zh("已添加书签", "Bookmark added") : zh("已移除书签", "Bookmark removed"))
+    }
+    function deleteBookmark(id) { _bookmarks = backend.deleteBookmark(bookId, id) || [] }
+    function jumpToBookmark(m) {
+        if (!m) return
+        if (bookFormat === "pdf") { setPdfPage(m.chapter); return }
+        if (_isChapterFormat && m.chapter >= 0 && m.chapter !== currentChapter) loadChapterByIndex(m.chapter)
+        bookmarkJumpTimer.target = m.char
+        bookmarkJumpTimer.restart()
+    }
+    Timer {
+        id: bookmarkJumpTimer
+        property int target: 0
+        interval: 60
+        onTriggered: {
+            if (root.readingMode === "paginated") root.jumpToPage(paginatedContainer.pageOf(target))
+            else {
+                var r = scrollTextEdit.positionToRectangle(target)
+                scrollFlickable.contentY = Math.max(0, Math.min(scrollFlickable.contentHeight - scrollFlickable.height, r.y - scrollTextEdit.topPadding))
+            }
+        }
+    }
+
+    // ── Keyboard ────────────────────────────────────────────────
     Keys.onLeftPressed:  {
         if (bookFormat === "pdf") pdfPagePrev()
         else if (readingMode === "paginated") pagePrev()
@@ -674,22 +772,33 @@ Rectangle {
     }
     // Esc closes the innermost layer first, then leaves the book
     Keys.onEscapePressed: {
-        if (tocPanel.visible || settingsPanel.visible || root._notesVisible) {
-            tocPanel.visible = false; settingsPanel.visible = false; root._notesVisible = false
-        } else if (annotationToolbar.visible) {
-            root._clearSelection()
-        } else {
-            root.goBack()
-        }
+        if (annotationToolbar.visible) root._clearSelection()
+        else if (_anyPanel) closePanels()
+        else root.goBack()
     }
 
-    // ── Top Bar ─────────────────────────────────────────────────
+    function _stepFont(delta) {
+        if (bookFormat === "pdf") { pdfZoom = Math.max(0.5, Math.min(3.0, pdfZoom + delta * 0.1)); return }
+        var size = delta === 0 ? 18 : Math.max(14, Math.min(28, fontSize + delta))
+        if (size !== fontSize) setPreference("font_size", size)
+    }
+    Shortcut { sequences: ["Ctrl++", "Ctrl+="]; enabled: root.enabled; onActivated: root._stepFont(1) }
+    Shortcut { sequence: "Ctrl+-"; enabled: root.enabled; onActivated: root._stepFont(-1) }
+    Shortcut { sequence: "Ctrl+0"; enabled: root.enabled; onActivated: root._stepFont(0) }
+    Shortcut { sequence: "Ctrl+D"; enabled: root.enabled; onActivated: root.toggleBookmark() }
+    Shortcut { sequence: "Ctrl+Alt+S"; enabled: root.enabled; onActivated: root.toggleSidebar("toc") }
+
+    // ── Top Bar (overlays its own strip; text never moves when it fades) ──
     Rectangle {
         id: topBar
         width: parent.width
         height: 52
         color: root.bgColor
         z: 10
+        opacity: root._chromeVisible || root._anyPanel ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: Theme.durBase; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.easeOut } }
+        HoverHandler { id: topHover }
 
         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root._palette.border; opacity: 0.6 }
 
@@ -708,11 +817,10 @@ Rectangle {
                 Accessible.name: zh("返回书库", "Back to library")
             }
             ReaderIcon {
-                visible: _isChapterFormat && chapterModel.count > 1
-                iconName: "list"
-                label: zh("目录", "Contents")
-                active: tocPanel.visible
-                onClicked: { settingsPanel.visible = false; root._notesVisible = false; tocPanel.visible = !tocPanel.visible }
+                iconName: "panel-left"
+                label: zh("目录、书签与笔记", "Contents, bookmarks and notes")
+                active: root._sidebarVisible
+                onClicked: root._sidebarVisible ? (root._sidebarVisible = false) : root.openSidebar(root._sidebarTab)
             }
 
             Item { Layout.fillWidth: true }
@@ -724,19 +832,34 @@ Rectangle {
                 enabled: currentChapter > 0
                 onClicked: gotoPrevChapter()
             }
-            Text {
-                Layout.maximumWidth: Math.max(160, root.width - 560)
-                text: {
-                    if (_isChapterFormat && currentChapter >= 0 && currentChapter < chapterModel.count)
-                        return chapterModel.get(currentChapter).title
-                    return root.bookTitle
+            ColumnLayout {
+                Layout.maximumWidth: Math.max(160, root.width - 600)
+                Layout.preferredWidth: Math.max(titleText.implicitWidth, chapterText.implicitWidth)
+                spacing: 1
+                Text {
+                    id: titleText
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    text: root.bookTitle
+                    color: root.textColor
+                    opacity: 0.85
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.fontSmall
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideMiddle
                 }
-                color: root.textColor
-                opacity: 0.75
-                font.family: Theme.uiFont
-                font.pixelSize: Theme.fontBody
-                font.weight: Font.Medium
-                elide: Text.ElideMiddle
+                Text {
+                    id: chapterText
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    visible: text !== ""
+                    text: (_isChapterFormat && currentChapter >= 0 && currentChapter < chapterModel.count) ? chapterModel.get(currentChapter).title : ""
+                    color: root.textColor
+                    opacity: 0.5
+                    font.family: Theme.uiFont
+                    font.pixelSize: 11
+                    elide: Text.ElideMiddle
+                }
             }
             ReaderIcon {
                 visible: _isChapterFormat && chapterModel.count > 1
@@ -749,6 +872,13 @@ Rectangle {
             Item { Layout.fillWidth: true }
 
             ReaderIcon {
+                objectName: "bookmarkButton"
+                iconName: root.pageBookmarked ? "bookmark-check" : "bookmark"
+                label: root.pageBookmarked ? zh("移除本页书签", "Remove bookmark") : zh("为本页添加书签", "Bookmark this page")
+                active: root.pageBookmarked
+                onClicked: root.toggleBookmark()
+            }
+            ReaderIcon {
                 visible: root.bookFormat !== "pdf"
                 iconName: "highlighter"
                 label: root._annotationMode ? zh("结束划线", "Stop highlighting") : zh("划线", "Highlight")
@@ -760,7 +890,7 @@ Rectangle {
                 iconName: "notebook"
                 label: zh("笔记", "Notes")
                 active: root._notesVisible
-                onClicked: { tocPanel.visible = false; settingsPanel.visible = false; root._notesVisible = !root._notesVisible }
+                onClicked: root.toggleSidebar("notes")
                 Rectangle {
                     visible: root._annotations.length > 0
                     anchors.right: parent.right
@@ -787,9 +917,9 @@ Rectangle {
             }
             ReaderIcon {
                 iconName: "type"
-                label: zh("阅读设置", "Reading settings")
+                label: zh("外观", "Appearance")
                 active: settingsPanel.visible
-                onClicked: { tocPanel.visible = false; root._notesVisible = false; settingsPanel.visible = !settingsPanel.visible }
+                onClicked: { settingsPanel.visible = !settingsPanel.visible; root.showChrome() }
             }
         }
     }
@@ -800,73 +930,20 @@ Rectangle {
         opacity: enabled ? (active || hovered ? 1 : 0.7) : 0.3
     }
 
-    // ── TOC Panel (left side) ───────────────────────────────────
-    Rectangle {
-        id: tocPanel
-        objectName: "readerToc"
-        visible: false; z: 20
+    // ── Left sidebar: contents, bookmarks, notes ────────────────
+    ReaderSidebar {
+        id: sidePanel
+        objectName: "readerSidebar"
+        reader: root
+        z: 20
         anchors.top: topBar.bottom
-        anchors.topMargin: 8
-        anchors.left: parent.left; anchors.leftMargin: 12
-        width: 300
-        height: Math.min(chapterModel.count * 36 + 20, root.height * 0.75)
-        radius: Theme.radiusL
-        color: root._palette.surface
-        border.color: root._palette.border
-        onVisibleChanged: if (visible) { tocList.positionViewAtIndex(Math.max(0, currentChapter), ListView.Center); tocList.forceActiveFocus() }
-
-        MouseArea { anchors.fill: parent }
-
-        ListView {
-            id: tocList
-            anchors.fill: parent
-            anchors.margins: 8
-            model: chapterModel
-            clip: true
-            currentIndex: currentChapter
-            keyNavigationEnabled: true
-            boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar {}
-            Accessible.name: zh("目录", "Contents")
-            Keys.onReturnPressed: tocActivate(currentIndex)
-            Keys.onEnterPressed: tocActivate(currentIndex)
-
-            function tocActivate(i) {
-                var ch = chapterModel.get(i)
-                if (!ch) return
-                if (ch.isSection && loadFirstChildFromSection(i)) { tocPanel.visible = false; root.forceActiveFocus(); return }
-                if (ch.pageIndex >= 0) { loadChapterByIndex(i); tocPanel.visible = false; root.forceActiveFocus() }
-            }
-
-            delegate: Rectangle {
-                width: ListView.view.width
-                height: model.isSection ? 38 : 34
-                radius: Theme.radiusS
-                readonly property bool selected: index === currentChapter
-                color: model.isSection ? "transparent"
-                    : selected ? root._palette.accentSoft
-                    : (tocItemMa.containsMouse || (tocList.activeFocus && ListView.isCurrentItem)) ? root._palette.surfaceHover : "transparent"
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left; anchors.right: parent.right
-                    anchors.leftMargin: model.isSection ? 10 : 22; anchors.rightMargin: 12
-                    text: model.title
-                    color: model.isSection ? root._palette.textTertiary : (parent.selected ? root._palette.accentText : root._palette.text)
-                    font.family: Theme.uiFont
-                    font.pixelSize: model.isSection ? Theme.fontCaption : Theme.fontSmall
-                    font.weight: model.isSection || parent.selected ? Font.DemiBold : Font.Normal
-                    elide: Text.ElideRight
-                }
-                MouseArea {
-                    id: tocItemMa; anchors.fill: parent; hoverEnabled: true
-                    cursorShape: (model.pageIndex >= 0 || model.isSection) ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: tocList.tocActivate(index)
-                }
-            }
-        }
+        anchors.bottom: parent.bottom
+        x: root._sidebarVisible ? 0 : -width
+        visible: x > -width
+        Behavior on x { NumberAnimation { duration: Theme.durBase; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.easeOut } }
     }
 
-    // ── Settings Panel (right side) ─────────────────────────────
+    // ── Appearance panel (right) ────────────────────────────────
     ReaderSettingsPanel {
         id: settingsPanel
         objectName: "readerSettings"
@@ -876,17 +953,7 @@ Rectangle {
         anchors.topMargin: 8
         anchors.right: parent.right; anchors.rightMargin: 12
         height: Math.min(contentHeight, root.height - topBar.height - 24)
-    }
-
-    // ── Notes Panel (right side) ────────────────────────────────
-    NotesPanel {
-        id: notesPanel
-        reader: root
-        visible: root._notesVisible; z: 20
-        anchors.top: topBar.bottom
-        anchors.topMargin: 8
-        anchors.right: parent.right; anchors.rightMargin: 12
-        height: Math.min(root._annotations.length === 0 ? 260 : root._annotations.length * 110 + 80, root.height - topBar.height - 24)
+        onVisibleChanged: if (visible) root.showChrome()
     }
 
     // Panels dock beside the text (the reading area makes room for them), so no click-away overlay
@@ -911,10 +978,11 @@ Rectangle {
         objectName: "readingArea"
         anchors.top: topBar.bottom; anchors.topMargin: readError.visible ? readError.height + 12 : 0
         anchors.bottom: parent.bottom
+        anchors.bottomMargin: 52          // the progress strip below never covers text
         anchors.left: parent.left; anchors.right: parent.right
         // Open panels take their width from the text instead of covering it
-        anchors.leftMargin: tocPanel.visible ? tocPanel.width + 20 : 0
-        anchors.rightMargin: settingsPanel.visible ? settingsPanel.width + 20 : (root._notesVisible ? notesPanel.width + 20 : 0)
+        anchors.leftMargin: root._sidebarVisible ? sidePanel.width : 0
+        anchors.rightMargin: settingsPanel.visible ? settingsPanel.width + 20 : 0
         onWidthChanged: root._reflow()
         onHeightChanged: root._reflow()
 
@@ -1159,14 +1227,14 @@ Rectangle {
                             ctx.fillRect(startRect.x, startRect.y, endRect.x + endRect.width - startRect.x, startRect.height)
                         } else {
                             // First line
-                            ctx.fillRect(startRect.x, startRect.y, scrollTextEdit.width - startRect.x - root.pageMargin, startRect.height)
+                            ctx.fillRect(startRect.x, startRect.y, scrollTextEdit.width - startRect.x - root._textMargin, startRect.height)
                             // Middle lines
                             var lineH = startRect.height
                             for (var ly = startRect.y + lineH; ly < endRect.y - 1; ly += lineH) {
-                                ctx.fillRect(root.pageMargin, ly, scrollTextEdit.width - 2 * root.pageMargin, lineH)
+                                ctx.fillRect(root._textMargin, ly, scrollTextEdit.width - 2 * root._textMargin, lineH)
                             }
                             // Last line
-                            ctx.fillRect(root.pageMargin, endRect.y, endRect.x + endRect.width - root.pageMargin, endRect.height)
+                            ctx.fillRect(root._textMargin, endRect.y, endRect.x + endRect.width - root._textMargin, endRect.height)
                         }
                     }
                 }
@@ -1180,8 +1248,8 @@ Rectangle {
                 wrapMode: TextEdit.WordWrap
                 color: root.textColor
                 font.pixelSize: root.fontSize; font.family: root.fontFamily
-                leftPadding:  root.pageMargin
-                rightPadding: root.pageMargin
+                leftPadding:  root._textMargin
+                rightPadding: root._textMargin
                 topPadding: 30; bottomPadding: 60
                 readOnly: true
                 selectByMouse: root._annotationMode
@@ -1241,15 +1309,15 @@ Rectangle {
                 : root.fontSize * 1.6
 
             // Debounced margin for layout: avoids re-layout on every 5px drag tick
-            property int _effectiveMargin: root.pageMargin
+            property real _effectiveMargin: root._textMargin
             Timer {
                 id: marginDebounce
                 interval: 80; repeat: false
-                onTriggered: paginatedContainer._effectiveMargin = root.pageMargin
+                onTriggered: { root._reflow(); paginatedContainer._effectiveMargin = root._textMargin }
             }
             Connections {
                 target: root
-                function onPageMarginChanged() { marginDebounce.restart() }
+                function on_TextMarginChanged() { marginDebounce.restart() }
             }
 
             // Hidden Text for layout measurement (identical properties to visible Text)
@@ -1344,6 +1412,7 @@ Rectangle {
                 id: slideWrapper
                 anchors.fill: parent
                 x: root._slideOffset
+                opacity: 1 - 0.85 * Math.min(1, Math.abs(root._slideOffset) / Math.max(1, slideAnim.distance))
 
                 Row {
                     anchors.fill: parent; spacing: 0
@@ -1376,7 +1445,7 @@ Rectangle {
                                 Canvas {
                                     id: pageHighlights
                                     objectName: "pageHighlights"
-                                    x: root.pageMargin
+                                    x: paginatedContainer._effectiveMargin
                                     width: measureEdit.width
                                     height: parent.height
                                     readonly property string revision: [root._highlightRevision, pageColumn.globalCol, paginatedContainer._linesPerCol,
@@ -1411,8 +1480,8 @@ Rectangle {
                                     color: root.textColor
                                     font.pixelSize: root.fontSize; font.family: root.fontFamily
                                     lineHeight: 1.6
-                                    leftPadding: root.pageMargin
-                                    rightPadding: root.pageMargin
+                                    leftPadding: paginatedContainer._effectiveMargin
+                                    rightPadding: paginatedContainer._effectiveMargin
                                     y: {
                                         var globalCol = root._displayPage * (root.dualPage ? 2 : 1) + index
                                         return -globalCol * paginatedContainer._linesPerCol * paginatedContainer._lineH
@@ -1424,13 +1493,6 @@ Rectangle {
                 }
             }
 
-            // Page indicator
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom; anchors.bottomMargin: 8
-                text: (root._pageIndex + 1) + " / " + root._totalPages
-                color: root.textColor; opacity: 0.4; font.family: Theme.uiFont; font.pixelSize: Theme.fontCaption; font.features: Theme.tabular
-            }
 
             // Click zones for page turning
             MouseArea {
@@ -1459,7 +1521,7 @@ Rectangle {
 
                 function charAt(mx, my) {
                     var colIndex = root.dualPage && mx >= paginatedContainer._columnWidth ? 1 : 0
-                    var x = mx - colIndex * paginatedContainer._columnWidth - root.pageMargin
+                    var x = mx - colIndex * paginatedContainer._columnWidth - paginatedContainer._effectiveMargin
                     var y = my - paginatedContainer._topMargin
                     return paginatedContainer.posAt(root._displayPage * paginatedContainer._colsPerPage + colIndex, x, y)
                 }
@@ -1506,7 +1568,7 @@ Rectangle {
             z: 10
             enabled: !root._annotationMode   // leave presses to text selection while highlighting
             TapHandler {
-                onTapped: root._progressBarVisible = !root._progressBarVisible
+                onTapped: root._chromeVisible ? (root._chromeVisible = false) : root.showChrome()
             }
         }
     }
@@ -1623,12 +1685,25 @@ Rectangle {
     Item {
         id: progressBar
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 24
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: Math.min(parent.width * 0.65, 600)
-        height: 52; z: 25
+        anchors.bottomMargin: 4
+        x: readingArea.x + (readingArea.width - width) / 2
+        width: Math.min(readingArea.width * 0.7, 640)
+        height: 44; z: 25
+        HoverHandler { id: bottomHover }
 
-        visible: progressPill.opacity > 0
+        // Quiet page number while reading; the scrubber takes its place when the chrome shows
+        Text {
+            anchors.centerIn: parent
+            opacity: (root._isDark ? 0.62 : 0.5) * (1 - progressPill.opacity)
+            visible: opacity > 0
+            text: root.bookFormat === "pdf" ? (pdfFlickable.currentPdfPage + 1) + " / " + pdfFlickable.totalPdfPages
+                : root.readingMode === "paginated" ? (root._pageIndex + 1) + " / " + root._totalPages
+                : Math.round(progressBar.progress * 100) + "%"
+            color: root.textColor
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.fontCaption
+            font.features: Theme.tabular
+        }
 
         property real progress: {
             if (root.bookFormat === "pdf") {
@@ -1657,18 +1732,11 @@ Rectangle {
         Rectangle {
             id: progressPill
             anchors.fill: parent
-            radius: 26
-            color: root._palette.surface
-            border.color: root._palette.border
-            border.width: 1
+            radius: 22
+            color: "transparent"
 
-            opacity: root._progressBarVisible ? 1.0 : 0.0
-            Behavior on opacity { NumberAnimation { duration: Theme.base; easing.type: Easing.OutCubic } }
-
-            transform: Translate {
-                y: root._progressBarVisible ? 0 : 8
-                Behavior on y { NumberAnimation { duration: Theme.base; easing.type: Easing.OutCubic } }
-            }
+            opacity: root._chromeVisible || root._anyPanel ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: Theme.durBase; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.easeOut } }
 
             RowLayout {
                 anchors.fill: parent
@@ -1690,7 +1758,7 @@ Rectangle {
                     Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width; height: 4; radius: 2
-                        color: root._palette.sunken
+                        color: root._isDark ? root._palette.borderStrong : root._palette.border
 
                         // Filled track
                         Rectangle {
@@ -1720,7 +1788,7 @@ Rectangle {
                                     chapterTooltip.text = root._chapterMarkers[index].title
                                     chapterTooltip.x = parent.x + parent.width / 2 - chapterTooltip.width / 2
                                     chapterTooltip.visible = true
-                                    progressAutoHide.restart()
+                                    root.showChrome()
                                 }
                                 onExited: chapterTooltip.visible = false
                                 onClicked: {
@@ -1788,7 +1856,7 @@ Rectangle {
                                 }
                             }
                             if (!snapped) chapterTooltip.visible = false
-                            progressAutoHide.restart()
+                            root.showChrome()
 
                             if (root.bookFormat === "pdf") {
                                 var pg = Math.round(r * (pdfFlickable.totalPdfPages - 1))

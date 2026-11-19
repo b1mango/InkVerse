@@ -29,8 +29,7 @@ MenuItem {
         leftPadding: 0
         LucideIcon {
             anchors.verticalCenter: parent.verticalCenter
-            visible: item.iconName !== ""
-            name: item.iconName
+            name: item.iconName           // empty name keeps the slot so labels line up
             size: 16
             color: item.destructive ? Theme.danger : Theme.textSecondary
         }

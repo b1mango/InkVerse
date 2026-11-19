@@ -1,4 +1,5 @@
 import shutil
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -109,17 +110,57 @@ def delete_book(book_id: str) -> None:
     _ann_path(book_id).unlink(missing_ok=True)
 
 
+def _unit(value) -> Optional[float]:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if value != value else min(1.0, max(0.0, value))  # NaN -> None
+
+
 @serialized
-def save_reading_progress(book_id: str, chapter: int, ratio: float) -> None:
-    """Remember where the reader stopped: chapter row (or PDF page) and position inside it."""
+def save_reading_progress(book_id: str, chapter: int, ratio: float, percent: Optional[float] = None) -> None:
+    """Remember where the reader stopped: chapter row (or PDF page), position inside it and the
+    share of the whole book read (shown under covers), plus when the book was last opened."""
     try:
         chapter = int(chapter)
-        ratio = float(ratio)
     except (TypeError, ValueError):
         return
-    if ratio != ratio:  # NaN
-        ratio = 0.0
-    update_book(book_id, progress={"chapter": max(-1, chapter), "ratio": min(1.0, max(0.0, ratio))})
+    progress = {"chapter": max(-1, chapter), "ratio": _unit(ratio) or 0.0}
+    whole = _unit(percent)
+    if whole is not None:
+        progress["percent"] = whole
+    update_book(book_id, progress=progress, last_opened=time.time())
+
+
+@serialized
+def toggle_bookmark(book_id: str, chapter: int, char: int, excerpt: str, page_start: int, page_end: int) -> List[dict]:
+    """Bookmark the current page, or remove the bookmark(s) already on it ([page_start, page_end) in chapter)."""
+    book = get_book(book_id)
+    if not book:
+        return []
+    marks = [m for m in book.get("bookmarks", []) if isinstance(m, dict)]
+    on_page = [m for m in marks if m.get("chapter") == chapter and page_start <= m.get("char", -1) < page_end]
+    if on_page:
+        marks = [m for m in marks if m not in on_page]
+    else:
+        marks.append({"id": str(uuid4()), "chapter": int(chapter), "char": int(char),
+                      "excerpt": (excerpt or "").strip()[:80], "created": time.time()})
+        marks.sort(key=lambda m: (m.get("chapter", 0), m.get("char", 0)))
+    update_book(book_id, bookmarks=marks)
+    return marks
+
+
+def list_bookmarks(book_id: str) -> List[dict]:
+    book = get_book(book_id) or {}
+    return [m for m in book.get("bookmarks", []) if isinstance(m, dict)]
+
+
+@serialized
+def delete_bookmark(book_id: str, bookmark_id: str) -> List[dict]:
+    marks = [m for m in list_bookmarks(book_id) if m.get("id") != bookmark_id]
+    update_book(book_id, bookmarks=marks)
+    return marks
 
 
 @serialized
@@ -202,6 +243,7 @@ def add_imported_files(paths: Iterable[Path]) -> List[dict]:
             "status": "",
             "path": str(dest),
             "format": fmt,
+            "added_at": time.time(),
         }
         data["books"].append(entry)
         added.append(entry)

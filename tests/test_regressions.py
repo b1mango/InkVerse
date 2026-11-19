@@ -184,10 +184,23 @@ class LibraryTests(unittest.TestCase):
 
     def test_reading_progress_is_clamped_and_kept(self):
         book = self.import_text()
-        self.library.save_reading_progress(book["id"], 3, 1.7)
-        self.assertEqual(self.library.get_book(book["id"])["progress"], {"chapter": 3, "ratio": 1.0})
-        self.library.save_reading_progress(book["id"], -5, float("nan"))
+        self.library.save_reading_progress(book["id"], 3, 1.7, 0.42)
+        saved = self.library.get_book(book["id"])
+        self.assertEqual(saved["progress"], {"chapter": 3, "ratio": 1.0, "percent": 0.42})
+        self.assertIn("last_opened", saved)
+        self.library.save_reading_progress(book["id"], -5, float("nan"), float("nan"))
         self.assertEqual(self.library.get_book(book["id"])["progress"], {"chapter": -1, "ratio": 0.0})
+
+    def test_bookmark_toggles_per_page(self):
+        book = self.import_text()
+        self.assertIn("added_at", book)
+        marks = self.library.toggle_bookmark(book["id"], 2, 120, "  一段摘录  ", 100, 200)
+        self.assertEqual(len(marks), 1)
+        self.assertEqual(marks[0]["excerpt"], "一段摘录")
+        # a second toggle anywhere on the same page removes it
+        self.assertEqual(self.library.toggle_bookmark(book["id"], 2, 150, "", 100, 200), [])
+        marks = self.library.toggle_bookmark(book["id"], 2, 120, "", 100, 200)
+        self.assertEqual(self.library.delete_bookmark(book["id"], marks[0]["id"]), [])
 
 
 class EncodingTests(unittest.TestCase):

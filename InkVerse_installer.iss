@@ -3,7 +3,7 @@
 ; The version comes from app/__init__.py; CI passes it as /DMyAppVersion=x.y.z.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.3.0"
 #endif
 
 [Setup]
