@@ -57,6 +57,17 @@ python -m app.main
 
 阅读数据存储在 `~/.inkverse/`，包括书库元数据、导入副本、阅读统计、封面缓存和批注。应用会为缺少封面的书籍访问在线书目服务；不要把本地书籍或凭据提交到仓库。
 
+## 打包
+
+```bash
+python -m pip install pyinstaller
+pyinstaller InkVerse.spec --noconfirm
+```
+
+- macOS（arm64）：生成 `dist/InkVerse.app`，未签名，首次需右键「打开」。
+- Windows：生成 `dist/InkVerse/`，再用 Inno Setup 编译 `InkVerse_installer.iss` 得到安装包；GitHub Actions 的 `Windows build` 工作流（手动触发或推送 `v*` 标签）会完成测试、打包、冒烟测试和安装包编译，安装包作为构建产物下载。
+- 打包后可用 `InkVerse --smoke-test <目录>` 在临时书库上自检：依次截取首页、书库和第一本书，`smoke-test.json` 记录 QML 警告，无警告时退出码为 0。
+
 ## License
 
 原 README 声明项目使用 MIT License，但仓库当前未附 `LICENSE` 文件。该声明保留供项目方确认；补充许可证文本后再将徽章更新为正式许可证链接。

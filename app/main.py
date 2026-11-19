@@ -3,7 +3,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import Q_ARG, QMetaObject, QObject, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QFontDatabase, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
@@ -53,6 +53,7 @@ from core.library import (
     update_annotation,
     update_book,
 )
+from app import __version__
 from core.settings import load_settings, save_settings
 from core.storage import ensure_storage
 from core.reading import ReadingSession
@@ -389,6 +390,36 @@ class LibraryBackend(QObject):
         return delete_annotation(bookId, annotationId)
 
 
+def _run_smoke_test(app, engine, backend, out_dir: Path, warnings: list) -> None:
+    """Packaging check: show home, library and the first book, save screenshots, then quit.
+
+    Run as ``InkVerse --smoke-test DIR`` with HOME pointing at a throwaway library.
+    Exit code 0 means the QML loaded and no QML warning was raised.
+    """
+    import json
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    window = engine.rootObjects()[0]
+    books = backend.listBooks()
+    steps = [("home", lambda: window.setProperty("currentViewIndex", 0)),
+             ("library", lambda: window.setProperty("currentViewIndex", 1))]
+    if books:
+        first = {"id": books[0]["id"], "title": books[0]["title"], "format": books[0]["format"]}
+        steps.append(("reader", lambda: QMetaObject.invokeMethod(window, "openBook", Q_ARG("QVariant", first))))
+
+    def run(index=0):
+        if index == len(steps):
+            report = {"version": __version__, "books": len(books), "qml_warnings": warnings}
+            (out_dir / "smoke-test.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+            app.exit(1 if warnings else 0)
+            return
+        name, action = steps[index]
+        action()
+        QTimer.singleShot(1200, lambda: (window.grabWindow().save(str(out_dir / f"{name}.png")), run(index + 1)))
+
+    QTimer.singleShot(1500, run)
+
+
 def main() -> int:
     # One custom-drawn control set on every platform, so the design tokens apply everywhere.
     QQuickStyle.setStyle("Basic")
@@ -407,8 +438,11 @@ def main() -> int:
         except Exception:
             pass
 
+    qml_warnings: list = []
+
     def _log_warnings(warnings):
         for w in warnings:
+            qml_warnings.append(w.toString())
             _log(f"QML warning: {w.toString()}")
 
     engine.warnings.connect(_log_warnings)
@@ -431,6 +465,7 @@ def main() -> int:
     backend = LibraryBackend()
     app.aboutToQuit.connect(backend.endReadingSession)
     engine.rootContext().setContextProperty("backend", backend)
+    engine.rootContext().setContextProperty("appVersion", __version__)
 
     qml_path = ROOT_DIR / "ui" / "main.qml"
     try:
@@ -442,6 +477,11 @@ def main() -> int:
     if not engine.rootObjects():
         _log("No root objects loaded. QML failed to initialize.")
         return 1
+
+    if "--smoke-test" in sys.argv:
+        index = sys.argv.index("--smoke-test")
+        target = Path(sys.argv[index + 1]) if index + 1 < len(sys.argv) else Path.cwd() / "smoke-test"
+        _run_smoke_test(app, engine, backend, target, qml_warnings)
 
     return app.exec()
 

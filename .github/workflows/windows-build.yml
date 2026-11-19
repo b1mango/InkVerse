@@ -1,0 +1,88 @@
+name: Windows build
+
+# Builds the Windows installer from InkVerse.spec + InkVerse_installer.iss.
+# Manual runs and release tags only; nothing is published, the installer is an artifact.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+      - "墨界InkVerse-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6-Essentials ebooklib PyMuPDF mobi Pillow pyinstaller
+
+      - name: Read app version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path app/__init__.py -Pattern '__version__ = "([^"]+)"').Matches[0].Groups[1].Value
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -notlike "*$v*") {
+            throw "Tag ${{ github.ref_name }} does not match app version $v (app/__init__.py)"
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "InkVerse $v"
+
+      - name: Unit and QML tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -B -m unittest discover -s tests -v
+
+      - name: PyInstaller
+        run: pyinstaller InkVerse.spec --noconfirm
+
+      - name: Smoke test the built app (empty throwaway library)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $profileDir = Join-Path $env:RUNNER_TEMP "inkverse-home"
+          New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+          $env:USERPROFILE = $profileDir
+          $env:HOME = $profileDir
+          $out = Join-Path $env:RUNNER_TEMP "smoke"
+          $p = Start-Process -FilePath "dist\InkVerse\InkVerse.exe" -ArgumentList "--smoke-test", "`"$out`"" -Wait -PassThru
+          Get-Content (Join-Path $out "smoke-test.json")
+          if ($p.ExitCode -ne 0) { throw "Smoke test failed with exit code $($p.ExitCode)" }
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" InkVerse_installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InkVerse-${{ steps.version.outputs.version }}-windows-setup
+          path: release/*.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test-screenshots
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore

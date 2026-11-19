@@ -1,14 +1,20 @@
-; Inno Setup Script for InkVerse
-; Generated on 2026-02-09
+﻿; Inno Setup Script for InkVerse
+; Packages the PyInstaller folder dist\InkVerse (built from InkVerse.spec).
+; The version comes from app/__init__.py; CI passes it as /DMyAppVersion=x.y.z.
+
+#ifndef MyAppVersion
+  #define MyAppVersion "0.2.0"
+#endif
 
 [Setup]
 AppName=InkVerse
-AppVersion=0.1.0
-DefaultDirName={pf}\InkVerse
+AppVersion={#MyAppVersion}
+AppPublisher=b1mango
+DefaultDirName={autopf}\InkVerse
 DefaultGroupName=InkVerse
 DisableProgramGroupPage=no
 OutputDir=release
-OutputBaseFilename=InkVerse_Setup
+OutputBaseFilename=InkVerse-{#MyAppVersion}-Setup
 Compression=lzma
 SolidCompression=yes
 PrivilegesRequired=admin
@@ -37,5 +43,5 @@ Filename: "{app}\InkVerse.exe"; Description: "Launch InkVerse"; Flags: nowait po
 [UninstallDelete]
 Type: files; Name: "{app}\*"
 
-; Compile command example (PowerShell):
-; & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DSourcePath="F:\\VSCode Projects\\InkVerse" "F:\\VSCode Projects\\InkVerse\\InkVerse_installer.iss"
+; Compile command example (PowerShell, from the repository root after `pyinstaller InkVerse.spec`):
+; & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=0.2.0 InkVerse_installer.iss

@@ -59,7 +59,7 @@ Rectangle {
         Text {
             Layout.leftMargin: 12
             Layout.topMargin: 10
-            text: "v0.2.0"
+            text: typeof appVersion !== "undefined" ? "v" + appVersion : ""
             color: Theme.textTertiary
             font.family: Theme.uiFont
             font.pixelSize: Theme.fontCaption
