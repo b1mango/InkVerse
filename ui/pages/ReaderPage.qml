@@ -119,7 +119,7 @@ Rectangle {
     }
 
     function saveProgress() {
-        if (!bookId || _pendingRestore) return
+        if (!bookId || _pendingRestore || !backend) return
         if (bookFormat === "pdf") backend.saveReadingProgress(bookId, pdfFlickable.currentPdfPage, 0)
         else backend.saveReadingProgress(bookId, currentChapter, _positionRatio())
     }
@@ -176,6 +176,7 @@ Rectangle {
 
     function setPreference(key, value) {
         var ratio = _positionRatio()
+        _captureAnchor()
         if (key === "background") bgKey = value
         else if (key === "font_family") fontFamily = value
         else if (key === "font_size") fontSize = value
@@ -188,11 +189,52 @@ Rectangle {
         patch[key] = value
         root.preferencesChanged(patch)
         // Keep the reader on the same passage when the layout changes
-        if (bookFormat !== "pdf" && key !== "background") {
+        if (bookFormat === "pdf" || key === "background" || key === "pdf_fit_mode") return
+        if (key === "paragraph_spacing") {
+            // Spacing rewrites the text, so character offsets move; fall back to the relative position
             _pendingRestore = { chapter: currentChapter, ratio: ratio }
             restoreTimer.restart()
+        } else {
+            _reflow()
         }
     }
+
+    // ── Keeping the passage in place across re-layout ───────────
+    // The first character on screen is tracked while reading; when the text column changes width
+    // (panels docking, window resize, font or mode change) the view returns to the page holding it.
+    property int _anchorChar: 0
+    property bool _reflowing: false
+
+    function _captureAnchor() {
+        if (_reflowing || bookFormat === "pdf" || _pendingRestore) return
+        if (readingMode === "paginated")
+            _anchorChar = paginatedContainer.posAt(_displayPage * paginatedContainer._colsPerPage, 0, 0)
+        else
+            _anchorChar = scrollTextEdit.positionAt(pageMargin + 1, scrollFlickable.contentY + scrollTextEdit.topPadding + 2)
+    }
+
+    function _reflow() {
+        if (bookFormat === "pdf" || _pendingRestore) return
+        _reflowing = true
+        reflowTimer.restart()
+    }
+
+    Timer {
+        id: reflowTimer
+        interval: 60
+        onTriggered: {
+            if (root.readingMode === "paginated") {
+                root.jumpToPage(paginatedContainer.pageOf(root._anchorChar))
+            } else {
+                var r = scrollTextEdit.positionToRectangle(root._anchorChar)
+                var maxY = Math.max(0, scrollFlickable.contentHeight - scrollFlickable.height)
+                scrollFlickable.contentY = Math.max(0, Math.min(maxY, r.y - scrollTextEdit.topPadding))
+            }
+            root._reflowing = false
+            root._refreshHighlightRects()
+        }
+    }
+    on_DisplayPageChanged: Qt.callLater(_captureAnchor)
 
     // ── Annotations / Highlights ────────────────────────────────
     property bool _annotationMode: false
@@ -204,6 +246,7 @@ Rectangle {
     property string _selText: ""
     property string _commentTargetId: ""
     property string _flashAnnotationId: ""
+    property int _highlightRevision: 0   // bumps whenever highlights or the selection need repainting
 
     function _loadAnnotations() {
         if (backend && bookId) {
@@ -254,6 +297,27 @@ Rectangle {
         _selStart = -1; _selEnd = -1; _selText = ""
         annotationToolbar.visible = false
         if (scrollTextEdit.selectedText) scrollTextEdit.deselect()
+        _refreshHighlightRects()
+    }
+
+    function _copySelection() {
+        if (!_selText) return
+        if (readingMode === "scroll") scrollTextEdit.copy()
+        else paginatedContainer.copyRange(_selStart, _selEnd)
+    }
+
+    // Show the colour toolbar next to a point given in root coordinates
+    function _showAnnotationToolbar(px, py) {
+        annotationToolbar.x = Math.max(20, Math.min(px - annotationToolbar.width / 2, root.width - annotationToolbar.width - 20))
+        var y = py - annotationToolbar.height - 14
+        annotationToolbar.y = y < readingArea.y + 8 ? py + 24 : y
+        annotationToolbar.visible = true
+    }
+
+    function _openHighlightMenu(ann) {
+        highlightMenu.annId = ann.id
+        highlightMenu.annComment = ann.comment || ""
+        highlightMenu.popup()
     }
 
     function _deleteAnnotation(annId) {
@@ -262,6 +326,7 @@ Rectangle {
     }
 
     function _refreshHighlightRects() {
+        _highlightRevision++
         Qt.callLater(function() {
             if (scrollHighlightCanvas.available) scrollHighlightCanvas.requestPaint()
         })
@@ -284,13 +349,9 @@ Rectangle {
         return null
     }
 
-    // Highlighting works on the scrolling layout; turning it on from pages switches over in place
+    // Highlighting works in both page and scroll mode (not on PDF page images)
     function toggleAnnotationMode() {
         if (bookFormat === "pdf") return
-        if (!_annotationMode && readingMode === "paginated") {
-            setPreference("reading_mode", "scroll")
-            toast.show(zh("划线在滚动模式下进行，已切换为滚动阅读", "Highlighting works in scroll mode, switched to scrolling"))
-        }
         _annotationMode = !_annotationMode
         if (!_annotationMode) _clearSelection()
     }
@@ -298,7 +359,6 @@ Rectangle {
     // Open the note's chapter and bring its passage into view
     function jumpToAnnotation(ann) {
         if (!ann) return
-        _notesVisible = false
         if (_isChapterFormat && ann.chapter_index >= 0 && ann.chapter_index !== currentChapter)
             loadChapterByIndex(ann.chapter_index)
         _flashAnnotationId = ann.id
@@ -317,10 +377,7 @@ Rectangle {
                 var maxY = Math.max(0, scrollFlickable.contentHeight - scrollFlickable.height)
                 scrollFlickable.contentY = Math.max(0, Math.min(maxY, r.y - scrollFlickable.height * 0.3))
             } else {
-                prefixMeasure.text = root.displayText.substring(0, idx + 1)
-                var line = Math.max(0, prefixMeasure.lineCount - 1)
-                var col = Math.floor(line / Math.max(1, paginatedContainer._linesPerCol))
-                root.jumpToPage(Math.floor(col / (root.dualPage ? 2 : 1)))
+                root.jumpToPage(paginatedContainer.pageOf(idx))
             }
             root._refreshHighlightRects()
             flashTimer.restart()
@@ -832,12 +889,7 @@ Rectangle {
         height: Math.min(root._annotations.length === 0 ? 260 : root._annotations.length * 110 + 80, root.height - topBar.height - 24)
     }
 
-    // Click outside to close panels
-    MouseArea {
-        anchors.fill: parent; z: 15
-        visible: tocPanel.visible || settingsPanel.visible || root._notesVisible
-        onClicked: { tocPanel.visible = false; settingsPanel.visible = false; root._notesVisible = false; root.forceActiveFocus() }
-    }
+    // Panels dock beside the text (the reading area makes room for them), so no click-away overlay
 
     // ── Reading Area ────────────────────────────────────────────
     Text {
@@ -856,9 +908,15 @@ Rectangle {
     }
     Item {
         id: readingArea
+        objectName: "readingArea"
         anchors.top: topBar.bottom; anchors.topMargin: readError.visible ? readError.height + 12 : 0
         anchors.bottom: parent.bottom
         anchors.left: parent.left; anchors.right: parent.right
+        // Open panels take their width from the text instead of covering it
+        anchors.leftMargin: tocPanel.visible ? tocPanel.width + 20 : 0
+        anchors.rightMargin: settingsPanel.visible ? settingsPanel.width + 20 : (root._notesVisible ? notesPanel.width + 20 : 0)
+        onWidthChanged: root._reflow()
+        onHeightChanged: root._reflow()
 
         // ═══════════════ PDF IMAGE MODE ═══════════════
         Flickable {
@@ -1065,7 +1123,7 @@ Rectangle {
             contentHeight: scrollTextEdit.implicitHeight
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
-            onContentYChanged: progressSaveTimer.restart()
+            onContentYChanged: { progressSaveTimer.restart(); Qt.callLater(root._captureAnchor) }
 
             // Highlight underlay canvas
             Canvas {
@@ -1136,16 +1194,9 @@ Rectangle {
                         root._selStart = selectionStart
                         root._selEnd = selectionEnd
                         root._selText = selectedText
-                        // Position toolbar above selection
                         var rect = positionToRectangle(selectionStart)
-                        var yPos = rect.y - scrollFlickable.contentY - 50
-                        if (yPos < 10) yPos = rect.y - scrollFlickable.contentY + rect.height + 10
-                        annotationToolbar.x = Math.max(20, Math.min(
-                            rect.x - annotationToolbar.width / 2,
-                            root.width - annotationToolbar.width - 20
-                        ))
-                        annotationToolbar.y = readingArea.y + Math.max(10, yPos)
-                        annotationToolbar.visible = true
+                        var p = mapToItem(root, rect.x, rect.y)
+                        root._showAnnotationToolbar(p.x, p.y)
                     }
                 }
 
@@ -1163,11 +1214,7 @@ Rectangle {
                 onClicked: (mouse) => {
                     var textPos = scrollTextEdit.positionAt(mouse.x, mouse.y)
                     var hitAnn = root._findAnnotationAt(textPos)
-                    if (hitAnn) {
-                        highlightMenu.annId = hitAnn.id
-                        highlightMenu.annComment = hitAnn.comment || ""
-                        highlightMenu.popup()
-                    }
+                    if (hitAnn) root._openHighlightMenu(hitAnn)
                 }
             }
 
@@ -1183,6 +1230,7 @@ Rectangle {
         // ═══════════════ PAGINATED MODE (TXT/EPUB) ═══════════════
         Item {
             id: paginatedContainer
+            objectName: "pageView"
             visible: root.readingMode === "paginated" && root.bookFormat !== "pdf"
             anchors.fill: parent; clip: true
 
@@ -1219,15 +1267,57 @@ Rectangle {
                 onContentHeightChanged: paginatedContainer._recalcPages()
             }
 
-            // Measures the text up to a note so a jump lands on the right page
-            Text {
-                id: prefixMeasure
+            // Unspaced mirror of the page text. Text breaks lines exactly like TextEdit but has no
+            // character geometry, so this answers "which line and x is character n" (and back) for
+            // highlights, selection, note jumps and keeping the place across re-layout.
+            TextEdit {
+                id: measureEdit
                 visible: false
+                readOnly: true
                 width: layoutHelper.width
-                textFormat: Text.PlainText
-                wrapMode: Text.WordWrap
+                text: root.displayText
+                textFormat: TextEdit.PlainText
+                wrapMode: TextEdit.WordWrap
                 font.pixelSize: root.fontSize; font.family: root.fontFamily
-                lineHeight: 1.6
+            }
+
+            readonly property int _colsPerPage: root.dualPage ? 2 : 1
+            readonly property real _naturalLineH: measureEdit.lineCount > 0
+                ? measureEdit.contentHeight / measureEdit.lineCount : root.fontSize * 1.3
+            readonly property real _columnWidth: root.dualPage ? width / 2 : width
+
+            function lineOf(pos) {
+                var r = measureEdit.positionToRectangle(Math.max(0, pos))
+                return Math.max(0, Math.floor((r.y + r.height / 2) / _naturalLineH))
+            }
+            function pageOf(pos) {
+                return Math.floor(Math.floor(lineOf(pos) / Math.max(1, _linesPerCol)) / _colsPerPage)
+            }
+            // Character under (x, y) inside global column `col`; x and y are relative to its text box
+            function posAt(col, x, y) {
+                var inCol = Math.max(0, Math.min(_linesPerCol - 1, Math.floor(y / _lineH)))
+                var line = col * _linesPerCol + inCol
+                return measureEdit.positionAt(Math.max(0, x), line * _naturalLineH + _naturalLineH / 2)
+            }
+            // Highlight boxes for [start, end) that fall in global column `col`, in its text-box coordinates
+            function rectsFor(start, end, col) {
+                var out = []
+                if (end <= start) return out
+                var first = lineOf(start), last = lineOf(end - 1)
+                var c0 = col * _linesPerCol, c1 = c0 + _linesPerCol - 1
+                var endRect = measureEdit.positionToRectangle(end)
+                var endOnLast = lineOf(end) === last
+                for (var line = Math.max(first, c0); line <= Math.min(last, c1); line++) {
+                    var x0 = line === first ? measureEdit.positionToRectangle(start).x : 0
+                    var x1 = (line === last && endOnLast) ? endRect.x : measureEdit.width
+                    if (x1 > x0) out.push({ x: x0, y: (line - c0) * _lineH, w: x1 - x0, h: _naturalLineH })
+                }
+                return out
+            }
+            function copyRange(start, end) {
+                measureEdit.select(start, end)
+                measureEdit.copy()
+                measureEdit.deselect()
             }
 
             function _recalcPages() {
@@ -1275,10 +1365,43 @@ Rectangle {
 
                             // Inner clip: exactly fits whole lines, no partial cut
                             Item {
+                                id: pageColumn
+                                readonly property int globalCol: root._displayPage * paginatedContainer._colsPerPage + index
                                 width: parent.width
                                 y: paginatedContainer._topMargin
                                 height: paginatedContainer._linesPerCol * paginatedContainer._lineH
                                 clip: true
+
+                                // Highlights and the live selection, painted under the glyphs
+                                Canvas {
+                                    id: pageHighlights
+                                    objectName: "pageHighlights"
+                                    x: root.pageMargin
+                                    width: measureEdit.width
+                                    height: parent.height
+                                    readonly property string revision: [root._highlightRevision, pageColumn.globalCol, paginatedContainer._linesPerCol,
+                                        width, root._selStart, root._selEnd, root._flashAnnotationId].join(":")
+                                    onRevisionChanged: requestPaint()
+                                    onPaint: {
+                                        var ctx = getContext("2d")
+                                        ctx.reset()
+                                        var anns = root._chapterAnnotations
+                                        for (var i = 0; i < anns.length; i++) {
+                                            var start = root._annotationOffset(anns[i])
+                                            if (start < 0) continue
+                                            ctx.fillStyle = anns[i].color
+                                            ctx.globalAlpha = anns[i].id === root._flashAnnotationId ? 0.6 : 0.28
+                                            var boxes = paginatedContainer.rectsFor(start, start + anns[i].text.length, pageColumn.globalCol)
+                                            for (var b = 0; b < boxes.length; b++) ctx.fillRect(boxes[b].x, boxes[b].y, boxes[b].w, boxes[b].h)
+                                        }
+                                        if (root._selEnd > root._selStart && root.readingMode === "paginated") {
+                                            ctx.fillStyle = root._palette.accent
+                                            ctx.globalAlpha = 0.28
+                                            var sel = paginatedContainer.rectsFor(root._selStart, root._selEnd, pageColumn.globalCol)
+                                            for (var k = 0; k < sel.length; k++) ctx.fillRect(sel[k].x, sel[k].y, sel[k].w, sel[k].h)
+                                        }
+                                    }
+                                }
 
                                 Text {
                                     width: parent.width
@@ -1320,6 +1443,58 @@ Rectangle {
                 width: parent.width * 0.3; z: 5; cursorShape: Qt.PointingHandCursor
                 onClicked: root.pageNext()
             }
+
+            // Highlighting on pages: drag to select, right-click a highlight for its menu.
+            // A plain click still turns the page from the outer thirds.
+            MouseArea {
+                id: pageSelect
+                objectName: "pageSelect"
+                anchors.fill: parent
+                z: 6
+                enabled: root._annotationMode
+                cursorShape: Qt.IBeamCursor
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                property int anchorPos: -1
+                property bool dragged: false
+
+                function charAt(mx, my) {
+                    var colIndex = root.dualPage && mx >= paginatedContainer._columnWidth ? 1 : 0
+                    var x = mx - colIndex * paginatedContainer._columnWidth - root.pageMargin
+                    var y = my - paginatedContainer._topMargin
+                    return paginatedContainer.posAt(root._displayPage * paginatedContainer._colsPerPage + colIndex, x, y)
+                }
+
+                onPressed: (mouse) => {
+                    if (mouse.button === Qt.RightButton) {
+                        var hit = root._findAnnotationAt(charAt(mouse.x, mouse.y))
+                        if (hit) root._openHighlightMenu(hit)
+                        return
+                    }
+                    root._clearSelection()
+                    anchorPos = charAt(mouse.x, mouse.y)
+                    dragged = false
+                }
+                onPositionChanged: (mouse) => {
+                    if (!(pressedButtons & Qt.LeftButton) || anchorPos < 0) return
+                    var here = charAt(mouse.x, mouse.y)
+                    if (here === anchorPos) return
+                    dragged = true
+                    root._selStart = Math.min(anchorPos, here)
+                    root._selEnd = Math.max(anchorPos, here)
+                }
+                onReleased: (mouse) => {
+                    if (mouse.button !== Qt.LeftButton) return
+                    if (dragged && root._selEnd > root._selStart) {
+                        root._selText = root.displayText.substring(root._selStart, root._selEnd)
+                        var p = mapToItem(root, mouse.x, mouse.y)
+                        root._showAnnotationToolbar(p.x, p.y)
+                    } else if (!dragged) {
+                        if (mouse.x < width * 0.3) root.pagePrev()
+                        else if (mouse.x > width * 0.7) root.pageNext()
+                    }
+                    anchorPos = -1
+                }
+            }
         }
 
         // ═══════════════ CENTER TAP ZONE (toggle progress bar) ═══════════════
@@ -1329,6 +1504,7 @@ Rectangle {
             anchors.top: parent.top; anchors.bottom: parent.bottom
             width: parent.width * 0.4
             z: 10
+            enabled: !root._annotationMode   // leave presses to text selection while highlighting
             TapHandler {
                 onTapped: root._progressBarVisible = !root._progressBarVisible
             }
@@ -1379,7 +1555,7 @@ Rectangle {
                 tone: root._palette
                 iconName: "copy"
                 label: zh("复制", "Copy")
-                onClicked: { if (root._selText) scrollTextEdit.copy(); root._clearSelection() }
+                onClicked: { root._copySelection(); root._clearSelection() }
             }
         }
     }
