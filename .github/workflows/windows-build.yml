@@ -1,7 +1,7 @@
 name: Windows build
 
 # Builds the Windows installer from InkVerse.spec + InkVerse_installer.iss.
-# Manual runs and release tags only; nothing is published, the installer is an artifact.
+# Manual runs keep the installer as an artifact; a release tag also attaches it to that tag's GitHub Release.
 on:
   workflow_dispatch:
   push:
@@ -10,7 +10,7 @@ on:
       - "墨界InkVerse-v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   installer:
@@ -85,3 +85,18 @@ jobs:
           name: smoke-test-screenshots
           path: ${{ runner.temp }}/smoke
           if-no-files-found: ignore
+
+      - name: Attach installer to the GitHub Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view $env:TAG -R $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG -R $env:GITHUB_REPOSITORY --title $env:TAG --notes "" --verify-tag
+            if ($LASTEXITCODE -ne 0) { throw "Could not create release $env:TAG" }
+          }
+          gh release upload $env:TAG (Get-ChildItem release/*.exe).FullName -R $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Upload failed" }
