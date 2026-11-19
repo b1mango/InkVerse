@@ -4,7 +4,7 @@
   <img src="assets/icons/app.ico" alt="InkVerse" width="112" height="112" />
 </p>
 
-<p align="center">毛玻璃态与水墨东方风格的轻量电子书阅读器</p>
+<p align="center">冷调徽墨与竹青配色的轻量电子书阅读器</p>
 
 <p align="center">
   <a href="https://github.com/b1mango/InkVerse/releases/tag/%E5%A2%A8%E7%95%8CInkVerse-v0.1.0-alpha"><img src="https://img.shields.io/badge/release-v0.1.0--alpha-2ea043" alt="release v0.1.0-alpha" /></a>
@@ -20,7 +20,9 @@
 - 文本选择、高亮和按章节位置排序的批注
 - 日、周、月、年阅读统计与近六个月热力图
 - EPUB/PDF 封面提取、自动生成和在线封面与作者信息查询
-- 水墨与素笺主题、中文字体和 QML 界面
+- 浅色、深色与跟随系统三种外观，界面用系统无衬线字体与 Lucide 图标，正文字体可选
+- 主题、阅读参数和每本书的阅读位置自动保存，重新打开回到上次读到的地方
+- 窗口内任意位置拖入文件即可导入；删除书籍前二次确认
 
 ## 安装
 

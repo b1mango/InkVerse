@@ -1,7 +1,11 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
+import "../components"
+import "../theme"
 
+/*  ReaderPage – 阅读页：TXT/EPUB/MOBI 分页或滚动，PDF 整页渲染
+    阅读参数写回全局偏好；每本书的章节与页内位置随翻页保存，重新打开时恢复。  */
 Rectangle {
     id: root
     color: bgColor
@@ -14,6 +18,9 @@ Rectangle {
     property string lang: "zh"
     property int currentChapter: -1
     signal backRequested()
+    signal preferencesChanged(var patch)
+
+    function zh(a, b) { return lang === "zh" ? a : b }
 
     // ── Reading session tracking ────────────────────────────────
     property string _storageError: ""
@@ -46,9 +53,7 @@ Rectangle {
             bookText = result.text
             jumpToPage(0)
         }
-        encodingChoice.currentIndex = Qt.binding(function() {
-            return root._textEncodings.indexOf(root._textEncoding)
-        })
+        _textEncodingChanged()
     }
 
     Connections {
@@ -56,18 +61,138 @@ Rectangle {
         function onStorageError(message) { root._storageError = message }
     }
 
-    // ── Reading settings ────────────────────────────────────────
-    property string bgColor: "#eae8e5"
-    property string textColor: "#2a2828"
+    // ── Opening a book and remembering the place ────────────────
+    property var _pendingRestore: null
+
+    function open(book) {
+        bookFormat = book.format || "txt"   // before the id, so no view renders the new id as the old format
+        bookId = book.id || ""
+        bookTitle = book.title || "Untitled"
+        _annotationMode = false
+        _notesVisible = false
+        tocPanel.visible = false
+        settingsPanel.visible = false
+        _clearSelection()
+        _pendingRestore = backend.getReadingProgress(bookId) || null
+        if (bookFormat === "txt") {
+            loadTextBook()
+            loadChapters()
+        } else {
+            bookText = ""
+            loadChapters()
+        }
+        _restoreChapter()
+        _startSession()
+        root.forceActiveFocus()
+    }
+
+    function _restoreChapter() {
+        var pr = _pendingRestore
+        if (!pr || pr.chapter === undefined) { _pendingRestore = null; return }
+        if (bookFormat === "pdf") {
+            setPdfPage(pr.chapter)
+            _pendingRestore = null
+            return
+        }
+        if (_isChapterFormat && pr.chapter >= 0 && pr.chapter < chapterModel.count && pr.chapter !== currentChapter)
+            loadChapterByIndex(pr.chapter)
+        restoreTimer.restart()   // the page count settles after layout
+    }
+
+    Timer {
+        id: restoreTimer
+        interval: 60
+        onTriggered: {
+            var pr = root._pendingRestore
+            root._pendingRestore = null
+            if (!pr) return
+            var r = Math.max(0, Math.min(1, pr.ratio || 0))
+            if (root.readingMode === "paginated") root.jumpToPage(Math.round(r * Math.max(0, root._totalPages - 1)))
+            else scrollFlickable.contentY = r * Math.max(0, scrollFlickable.contentHeight - scrollFlickable.height)
+        }
+    }
+
+    function _positionRatio() {
+        if (readingMode === "paginated") return _totalPages > 1 ? _pageIndex / (_totalPages - 1) : 0
+        var maxY = scrollFlickable.contentHeight - scrollFlickable.height
+        return maxY > 0 ? scrollFlickable.contentY / maxY : 0
+    }
+
+    function saveProgress() {
+        if (!bookId || _pendingRestore) return
+        if (bookFormat === "pdf") backend.saveReadingProgress(bookId, pdfFlickable.currentPdfPage, 0)
+        else backend.saveReadingProgress(bookId, currentChapter, _positionRatio())
+    }
+
+    Timer { id: progressSaveTimer; interval: 800; onTriggered: root.saveProgress() }
+    on_PageIndexChanged: progressSaveTimer.restart()
+    onCurrentChapterChanged: progressSaveTimer.restart()
+
+    function goBack() {
+        progressSaveTimer.stop()
+        saveProgress()
+        if (_endSession()) backRequested()
+    }
+
+    // ── Reading preferences (shared by every book) ──────────────
+    property string bgKey: "paper"
     property int fontSize: 18
     property string fontFamily: "LXGW WenKai"
-    property int pageMargin: 120
+    property int pageMargin: 96
     property bool dualPage: false
     property string readingMode: "paginated"  // "scroll" or "paginated"
-    property int paragraphSpacing: 0       // 0-10 extra spacing
-    property string pdfFitMode: "fit_page" // fit_page, fit_width, original
+    property int paragraphSpacing: 0
+    property string pdfFitMode: "fit_page"
     property real pdfZoom: 1.0
     property bool _progressBarVisible: false
+
+    readonly property var bgPresets: [
+        { key: "paper",  name: zh("素纸", "Paper"), bg: "#FAFAF7", fg: "#1F2322" },
+        { key: "sepia",  name: zh("暖褐", "Sepia"), bg: "#F3EBDA", fg: "#3B3125" },
+        { key: "mist",   name: zh("烟灰", "Mist"),  bg: "#ECEFED", fg: "#222826" },
+        { key: "bamboo", name: zh("竹青", "Bamboo"), bg: "#E3EDE8", fg: "#1F2E29" },
+        { key: "night",  name: zh("夜间", "Night"), bg: "#121414", fg: "#C8D0CC" }
+    ]
+    function _preset(key) {
+        for (var i = 0; i < bgPresets.length; i++) if (bgPresets[i].key === key) return bgPresets[i]
+        return bgPresets[0]
+    }
+    readonly property string bgColor: _preset(bgKey).bg
+    readonly property string textColor: _preset(bgKey).fg
+    readonly property bool _isDark: bgKey === "night"
+    readonly property QtObject _palette: _isDark ? Theme.night : Theme.light
+
+    function applyPreferences(r) {
+        if (!r) return
+        if (r.background) bgKey = r.background
+        if (r.font_family) fontFamily = r.font_family
+        if (r.font_size) fontSize = r.font_size
+        if (r.page_margin) pageMargin = r.page_margin
+        if (r.paragraph_spacing !== undefined) paragraphSpacing = r.paragraph_spacing
+        if (r.reading_mode) readingMode = r.reading_mode
+        if (r.dual_page !== undefined) dualPage = r.dual_page
+        if (r.pdf_fit_mode) pdfFitMode = r.pdf_fit_mode
+    }
+
+    function setPreference(key, value) {
+        var ratio = _positionRatio()
+        if (key === "background") bgKey = value
+        else if (key === "font_family") fontFamily = value
+        else if (key === "font_size") fontSize = value
+        else if (key === "page_margin") pageMargin = value
+        else if (key === "paragraph_spacing") paragraphSpacing = value
+        else if (key === "reading_mode") readingMode = value
+        else if (key === "dual_page") dualPage = value
+        else if (key === "pdf_fit_mode") { pdfFitMode = value; pdfZoom = 1.0 }
+        var patch = {}
+        patch[key] = value
+        root.preferencesChanged(patch)
+        // Keep the reader on the same passage when the layout changes
+        if (bookFormat !== "pdf" && key !== "background") {
+            _pendingRestore = { chapter: currentChapter, ratio: ratio }
+            restoreTimer.restart()
+        }
+    }
 
     // ── Annotations / Highlights ────────────────────────────────
     property bool _annotationMode: false
@@ -77,8 +202,8 @@ Rectangle {
     property int _selStart: -1
     property int _selEnd: -1
     property string _selText: ""
-    // For right-click comment on existing highlight
     property string _commentTargetId: ""
+    property string _flashAnnotationId: ""
 
     function _loadAnnotations() {
         if (backend && bookId) {
@@ -111,11 +236,18 @@ Rectangle {
     function _commitComment() {
         if (!root._commentTargetId) return
         root._annotations = backend.updateAnnotationComment(
-            bookId, root._commentTargetId, commentTextInput.text.trim()
+            bookId, root._commentTargetId, commentField.text.trim()
         ) || []
         _updateChapterAnnotations()
         root._commentTargetId = ""
-        commentInputOverlay.visible = false
+        commentDialog.close()
+    }
+
+    function editComment(ann) {
+        if (!ann) return
+        root._commentTargetId = ann.id
+        commentField.text = ann.comment || ""
+        commentDialog.open()
     }
 
     function _clearSelection() {
@@ -130,24 +262,75 @@ Rectangle {
     }
 
     function _refreshHighlightRects() {
-        // Trigger Canvas repaint on next frame
         Qt.callLater(function() {
             if (scrollHighlightCanvas.available) scrollHighlightCanvas.requestPaint()
         })
     }
 
+    function _annotationOffset(ann) {
+        var dt = root.displayText
+        if (!ann || !ann.text || !dt) return -1
+        var idx = dt.indexOf(ann.text, Math.max(0, (ann.start || 0) - 20))
+        return idx >= 0 ? idx : dt.indexOf(ann.text)
+    }
+
     // Find annotation at a given text position (for right-click context menu)
     function _findAnnotationAt(pos) {
-        var dt = root.displayText
         for (var i = 0; i < root._chapterAnnotations.length; i++) {
             var ann = root._chapterAnnotations[i]
-            if (!ann.text || !dt) continue
-            var idx = dt.indexOf(ann.text, Math.max(0, ann.start - 20))
-            if (idx < 0) idx = dt.indexOf(ann.text)
-            if (idx < 0) continue
-            if (pos >= idx && pos < idx + ann.text.length) return ann
+            var idx = _annotationOffset(ann)
+            if (idx >= 0 && pos >= idx && pos < idx + ann.text.length) return ann
         }
         return null
+    }
+
+    // Highlighting works on the scrolling layout; turning it on from pages switches over in place
+    function toggleAnnotationMode() {
+        if (bookFormat === "pdf") return
+        if (!_annotationMode && readingMode === "paginated") {
+            setPreference("reading_mode", "scroll")
+            toast.show(zh("划线在滚动模式下进行，已切换为滚动阅读", "Highlighting works in scroll mode, switched to scrolling"))
+        }
+        _annotationMode = !_annotationMode
+        if (!_annotationMode) _clearSelection()
+    }
+
+    // Open the note's chapter and bring its passage into view
+    function jumpToAnnotation(ann) {
+        if (!ann) return
+        _notesVisible = false
+        if (_isChapterFormat && ann.chapter_index >= 0 && ann.chapter_index !== currentChapter)
+            loadChapterByIndex(ann.chapter_index)
+        _flashAnnotationId = ann.id
+        Qt.callLater(function() { annotationJumpTimer.ann = ann; annotationJumpTimer.restart() })
+    }
+
+    Timer {
+        id: annotationJumpTimer
+        property var ann: null
+        interval: 60
+        onTriggered: {
+            var idx = root._annotationOffset(ann)
+            if (idx < 0) return
+            if (root.readingMode === "scroll") {
+                var r = scrollTextEdit.positionToRectangle(idx)
+                var maxY = Math.max(0, scrollFlickable.contentHeight - scrollFlickable.height)
+                scrollFlickable.contentY = Math.max(0, Math.min(maxY, r.y - scrollFlickable.height * 0.3))
+            } else {
+                prefixMeasure.text = root.displayText.substring(0, idx + 1)
+                var line = Math.max(0, prefixMeasure.lineCount - 1)
+                var col = Math.floor(line / Math.max(1, paginatedContainer._linesPerCol))
+                root.jumpToPage(Math.floor(col / (root.dualPage ? 2 : 1)))
+            }
+            root._refreshHighlightRects()
+            flashTimer.restart()
+        }
+    }
+    Timer { id: flashTimer; interval: 1600; onTriggered: { root._flashAnnotationId = ""; root._refreshHighlightRects() } }
+
+    function chapterTitle(index) {
+        if (index >= 0 && index < chapterModel.count) return chapterModel.get(index).title
+        return ""
     }
 
     // Helper: does this format support chapters?
@@ -266,22 +449,6 @@ Rectangle {
     property int _displayPage: 0   // decoupled for slide animation
     property int _totalPages: 1
     property real _slideOffset: 0  // horizontal offset during animation
-
-    readonly property var bgPresets: [
-        { name: lang === "zh" ? "素纸" : "Paper",   bg: "#fdfbf7", fg: "#2a2420" },
-        { name: lang === "zh" ? "暖褐" : "Sepia",   bg: "#f4ecd8", fg: "#3d3429" },
-        { name: lang === "zh" ? "水墨" : "Ink",     bg: "#eae8e5", fg: "#2a2828" },
-        { name: lang === "zh" ? "竹青" : "Green",   bg: "#e8f0e6", fg: "#2e3828" },
-        { name: lang === "zh" ? "夜间" : "Night",   bg: "#1e1e2e", fg: "#d4d4d8" }
-    ]
-
-    // Derived dark-mode helpers
-    property bool _isDark: bgColor === "#1e1e2e"
-    property string _panelBg:     _isDark ? "#2a2a3e" : "#eeecea"
-    property string _panelBorder: _isDark ? "#3a3a4e" : "#d5d3d0"
-    property string _activeBg:    _isDark ? "#4a4a6e" : "#d5d3d0"
-    property string _hoverBg:     _isDark ? "#333350" : "#e5e3e0"
-    property string _dimText:     _isDark ? "#b0b0cc" : "#8a8580"
 
     ListModel { id: chapterModel }
 
@@ -430,6 +597,7 @@ Rectangle {
         NumberAnimation { target: root; property: "_slideOffset"; from: -slideAnim.direction * readingArea.width; to: 0; duration: 200; easing.type: Easing.OutCubic }
     }
 
+
     // ── Keyboard handling ───────────────────────────────────────
     Keys.onLeftPressed:  {
         if (bookFormat === "pdf") pdfPagePrev()
@@ -441,439 +609,234 @@ Rectangle {
         else if (readingMode === "paginated") pageNext()
         else gotoNextChapter()
     }
+    Keys.onSpacePressed: {
+        if (bookFormat === "pdf") pdfPageNext()
+        else if (readingMode === "paginated") pageNext()
+        else scrollFlickable.contentY = Math.min(Math.max(0, scrollFlickable.contentHeight - scrollFlickable.height),
+                                                 scrollFlickable.contentY + scrollFlickable.height * 0.9)
+    }
+    // Esc closes the innermost layer first, then leaves the book
+    Keys.onEscapePressed: {
+        if (tocPanel.visible || settingsPanel.visible || root._notesVisible) {
+            tocPanel.visible = false; settingsPanel.visible = false; root._notesVisible = false
+        } else if (annotationToolbar.visible) {
+            root._clearSelection()
+        } else {
+            root.goBack()
+        }
+    }
 
     // ── Top Bar ─────────────────────────────────────────────────
     Rectangle {
         id: topBar
-        width: parent.width; height: 50
-        color: "transparent"; z: 10
+        width: parent.width
+        height: 52
+        color: root.bgColor
+        z: 10
+
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root._palette.border; opacity: 0.6 }
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 20; anchors.rightMargin: 20
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            spacing: 2
 
-            Rectangle {
-                width: 70; height: 30; radius: 6
-                color: backMa.containsMouse ? "#15000000" : "transparent"
-                Text { anchors.centerIn: parent; text: "← " + (lang === "zh" ? "返回" : "Back"); color: root.textColor; opacity: 0.6; font.pixelSize: 14 }
-                MouseArea { id: backMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root._endSession()) root.backRequested() } }
+            AppButton {
+                text: zh("书库", "Library")
+                iconName: "arrow-left"
+                variant: "ghost"
+                compact: true
+                onClicked: root.goBack()
+                Accessible.name: zh("返回书库", "Back to library")
             }
-
-            Rectangle {
-                width: 50; height: 30; radius: 6
+            ReaderIcon {
                 visible: _isChapterFormat && chapterModel.count > 1
-                color: tocMa.containsMouse ? "#15000000" : "transparent"
-                Text { anchors.centerIn: parent; text: lang === "zh" ? "目录" : "TOC"; color: root.textColor; opacity: 0.5; font.pixelSize: 13 }
-                MouseArea { id: tocMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: tocPanel.visible = !tocPanel.visible }
-            }
-
-            Rectangle {
-                width: 30; height: 30; radius: 6
-                visible: _isChapterFormat && chapterModel.count > 1
-                color: prevMa.containsMouse ? "#15000000" : "transparent"
-                Text { anchors.centerIn: parent; text: "◀"; color: currentChapter > 0 ? root.textColor : "#ccc"; opacity: 0.6; font.pixelSize: 14 }
-                MouseArea { id: prevMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: gotoPrevChapter() }
+                iconName: "list"
+                label: zh("目录", "Contents")
+                active: tocPanel.visible
+                onClicked: { settingsPanel.visible = false; root._notesVisible = false; tocPanel.visible = !tocPanel.visible }
             }
 
             Item { Layout.fillWidth: true }
 
+            ReaderIcon {
+                visible: _isChapterFormat && chapterModel.count > 1
+                iconName: "chevron-left"
+                label: zh("上一章", "Previous chapter")
+                enabled: currentChapter > 0
+                onClicked: gotoPrevChapter()
+            }
             Text {
+                Layout.maximumWidth: Math.max(160, root.width - 560)
                 text: {
                     if (_isChapterFormat && currentChapter >= 0 && currentChapter < chapterModel.count)
                         return chapterModel.get(currentChapter).title
                     return root.bookTitle
                 }
-                color: root.textColor; opacity: 0.7
-                font.pixelSize: 14; font.weight: Font.Medium
-                elide: Text.ElideMiddle; Layout.maximumWidth: 400
+                color: root.textColor
+                opacity: 0.75
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.Medium
+                elide: Text.ElideMiddle
+            }
+            ReaderIcon {
+                visible: _isChapterFormat && chapterModel.count > 1
+                iconName: "chevron-right"
+                label: zh("下一章", "Next chapter")
+                enabled: currentChapter < chapterModel.count - 1
+                onClicked: gotoNextChapter()
             }
 
             Item { Layout.fillWidth: true }
 
-            Rectangle {
-                width: 30; height: 30; radius: 6
-                visible: _isChapterFormat && chapterModel.count > 1
-                color: nextMa.containsMouse ? "#15000000" : "transparent"
-                Text { anchors.centerIn: parent; text: "▶"; color: currentChapter < chapterModel.count - 1 ? root.textColor : "#ccc"; opacity: 0.6; font.pixelSize: 14 }
-                MouseArea { id: nextMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: gotoNextChapter() }
+            ReaderIcon {
+                visible: root.bookFormat !== "pdf"
+                iconName: "highlighter"
+                label: root._annotationMode ? zh("结束划线", "Stop highlighting") : zh("划线", "Highlight")
+                active: root._annotationMode
+                onClicked: root.toggleAnnotationMode()
             }
-
-            Rectangle {
-                width: 50; height: 30; radius: 6
-                color: settingsMa.containsMouse ? "#15000000" : "transparent"
-                Text { anchors.centerIn: parent; text: lang === "zh" ? "设置" : "Settings"; color: root.textColor; opacity: 0.5; font.pixelSize: 13 }
-                MouseArea { id: settingsMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: settingsPanel.visible = !settingsPanel.visible }
-            }
-
-            // Annotation mode toggle
-            Rectangle {
-                width: 50; height: 30; radius: 6
-                color: root._annotationMode ? (root._isDark ? "#4a4a6e" : "#d5d0c8") : (annModeMa.containsMouse ? "#15000000" : "transparent")
-                border.color: root._annotationMode ? (root._isDark ? "#6666aa" : "#a09888") : "transparent"
-                border.width: root._annotationMode ? 1.5 : 0
-                Text {
-                    anchors.centerIn: parent
-                    text: lang === "zh" ? "划线" : "Mark"
-                    color: root.textColor; opacity: root._annotationMode ? 0.9 : 0.5
-                    font.pixelSize: 13
-                }
-                MouseArea {
-                    id: annModeMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                    onClicked: root._annotationMode = !root._annotationMode
-                }
-            }
-
-            // Notes button
-            Rectangle {
-                width: 50; height: 30; radius: 6
-                color: notesMa.containsMouse ? "#15000000" : "transparent"
-                Text {
-                    anchors.centerIn: parent
-                    text: lang === "zh" ? "笔记" : "Notes"
-                    color: root.textColor; opacity: 0.5; font.pixelSize: 13
-                }
+            ReaderIcon {
+                id: notesButton
+                iconName: "notebook"
+                label: zh("笔记", "Notes")
+                active: root._notesVisible
+                onClicked: { tocPanel.visible = false; settingsPanel.visible = false; root._notesVisible = !root._notesVisible }
                 Rectangle {
                     visible: root._annotations.length > 0
-                    anchors.top: parent.top; anchors.right: parent.right
-                    anchors.topMargin: 2; anchors.rightMargin: 2
-                    width: 14; height: 14; radius: 7
-                    color: _isDark ? "#6666aa" : "#a09888"
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.rightMargin: -2
+                    anchors.topMargin: -1
+                    width: Math.max(15, countText.implicitWidth + 7)
+                    height: 15
+                    radius: 7.5
+                    border.color: root.bgColor
+                    border.width: 1.5
+                    color: root._palette.accent
                     Text {
+                        id: countText
                         anchors.centerIn: parent
-                        text: root._annotations.length > 99 ? "99" : root._annotations.length.toString()
-                        color: "#fff"; font.pixelSize: 7; font.weight: Font.Bold
+                        text: root._annotations.length > 99 ? "99+" : root._annotations.length
+                        color: root._palette.textOnAccent
+                        font.family: Theme.uiFont
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        font.features: Theme.tabular
                     }
                 }
-                MouseArea {
-                    id: notesMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                    onClicked: root._notesVisible = !root._notesVisible
-                }
+            }
+            ReaderIcon {
+                iconName: "type"
+                label: zh("阅读设置", "Reading settings")
+                active: settingsPanel.visible
+                onClicked: { tocPanel.visible = false; root._notesVisible = false; settingsPanel.visible = !settingsPanel.visible }
             }
         }
+    }
+
+    component ReaderIcon: IconButton {
+        tone: root._palette
+        iconColor: active ? root._palette.accentText : root.textColor
+        opacity: enabled ? (active || hovered ? 1 : 0.7) : 0.3
     }
 
     // ── TOC Panel (left side) ───────────────────────────────────
     Rectangle {
         id: tocPanel
+        objectName: "readerToc"
         visible: false; z: 20
         anchors.top: topBar.bottom
-        anchors.left: parent.left; anchors.leftMargin: 20
-        width: 300; height: Math.min(chapterModel.count * 38 + 20, root.height * 0.7)
-        radius: 10; color: _panelBg; border.color: _panelBorder
+        anchors.topMargin: 8
+        anchors.left: parent.left; anchors.leftMargin: 12
+        width: 300
+        height: Math.min(chapterModel.count * 36 + 20, root.height * 0.75)
+        radius: Theme.radiusL
+        color: root._palette.surface
+        border.color: root._palette.border
+        onVisibleChanged: if (visible) { tocList.positionViewAtIndex(Math.max(0, currentChapter), ListView.Center); tocList.forceActiveFocus() }
 
-        // Background blocker: prevents clicks from bleeding through to the click-outside overlay
-        MouseArea { anchors.fill: parent; z: 0 }
+        MouseArea { anchors.fill: parent }
 
         ListView {
-            z: 1
-            anchors.fill: parent; anchors.margins: 10
-            model: chapterModel; clip: true
+            id: tocList
+            anchors.fill: parent
+            anchors.margins: 8
+            model: chapterModel
+            clip: true
+            currentIndex: currentChapter
+            keyNavigationEnabled: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar {}
+            Accessible.name: zh("目录", "Contents")
+            Keys.onReturnPressed: tocActivate(currentIndex)
+            Keys.onEnterPressed: tocActivate(currentIndex)
+
+            function tocActivate(i) {
+                var ch = chapterModel.get(i)
+                if (!ch) return
+                if (ch.isSection && loadFirstChildFromSection(i)) { tocPanel.visible = false; root.forceActiveFocus(); return }
+                if (ch.pageIndex >= 0) { loadChapterByIndex(i); tocPanel.visible = false; root.forceActiveFocus() }
+            }
+
             delegate: Rectangle {
                 width: ListView.view.width
-                height: model.isSection ? 40 : 34; radius: 6
-                color: {
-                    if (model.isSection) return "transparent"
-                    if (index === currentChapter) return _isDark ? "#3a3a5e" : "#e8e4de"
-                    if (tocItemMa.containsMouse) return _hoverBg
-                    return "transparent"
-                }
+                height: model.isSection ? 38 : 34
+                radius: Theme.radiusS
+                readonly property bool selected: index === currentChapter
+                color: model.isSection ? "transparent"
+                    : selected ? root._palette.accentSoft
+                    : (tocItemMa.containsMouse || (tocList.activeFocus && ListView.isCurrentItem)) ? root._palette.surfaceHover : "transparent"
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left; anchors.right: parent.right
-                    anchors.leftMargin: model.isSection ? 8 : 20; anchors.rightMargin: 12
+                    anchors.leftMargin: model.isSection ? 10 : 22; anchors.rightMargin: 12
                     text: model.title
-                    color: {
-                        if (model.isSection) return _isDark ? "#a0a0c0" : "#999"
-                        if (index === currentChapter) return _isDark ? "#e0e0ff" : "#333"
-                        return _dimText
-                    }
-                    font.pixelSize: model.isSection ? 14 : 13
-                    font.weight: model.isSection ? Font.Bold : (index === currentChapter ? Font.DemiBold : Font.Normal)
+                    color: model.isSection ? root._palette.textTertiary : (parent.selected ? root._palette.accentText : root._palette.text)
+                    font.family: Theme.uiFont
+                    font.pixelSize: model.isSection ? Theme.fontCaption : Theme.fontSmall
+                    font.weight: model.isSection || parent.selected ? Font.DemiBold : Font.Normal
                     elide: Text.ElideRight
                 }
                 MouseArea {
                     id: tocItemMa; anchors.fill: parent; hoverEnabled: true
-                    cursorShape: (model.pageIndex >= 0) ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: {
-                        if (model.isSection) {
-                            if (loadFirstChildFromSection(index)) {
-                                tocPanel.visible = false
-                                return
-                            }
-                            // Section without children – fall through to treat as regular chapter
-                        }
-                        if (model.pageIndex >= 0) {
-                            loadChapterByIndex(index)
-                            tocPanel.visible = false
-                        }
-                    }
+                    cursorShape: (model.pageIndex >= 0 || model.isSection) ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: tocList.tocActivate(index)
                 }
             }
         }
     }
 
     // ── Settings Panel (right side) ─────────────────────────────
-    Rectangle {
+    ReaderSettingsPanel {
         id: settingsPanel
+        objectName: "readerSettings"
+        reader: root
         visible: false; z: 20
         anchors.top: topBar.bottom
-        anchors.right: parent.right; anchors.rightMargin: 20
-        width: 300
-        height: Math.min(settingsCol.implicitHeight + 40, Math.max(100, root.height - topBar.height - 20))
-        radius: 10; color: _panelBg; border.color: _panelBorder
+        anchors.topMargin: 8
+        anchors.right: parent.right; anchors.rightMargin: 12
+        height: Math.min(contentHeight, root.height - topBar.height - 24)
+    }
 
-        ScrollView {
-            id: settingsScroll
-            anchors.fill: parent; anchors.margins: 20
-            clip: true
-            contentWidth: availableWidth
-            contentHeight: settingsCol.implicitHeight
-
-        Column {
-            id: settingsCol
-            width: settingsScroll.availableWidth
-            spacing: 20
-
-            Row {
-                visible: root.bookFormat === "txt"
-                width: parent.width
-                spacing: 12
-                Text {
-                    text: lang === "zh" ? "文字编码" : "Text encoding"
-                    color: root.textColor; font.pixelSize: 13
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                ComboBox {
-                    id: encodingChoice
-                    width: parent.width - x
-                    model: [lang === "zh" ? "自动识别" : "Automatic", "UTF-8", "GB18030 / GBK", "Big5", "UTF-16 (BOM)", "UTF-16 LE", "UTF-16 BE"]
-                    currentIndex: root._textEncodings.indexOf(root._textEncoding)
-                    onActivated: root.changeTextEncoding(root._textEncodings[currentIndex])
-                    Accessible.name: lang === "zh" ? "文字编码" : "Text encoding"
-                }
-            }
-
-            // ── Background ──
-            Text { text: lang === "zh" ? "阅读背景" : "Background"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
-            Row {
-                spacing: 10
-                Repeater {
-                    model: root.bgPresets.length
-                    Rectangle {
-                        width: 44; height: 30; radius: 6
-                        color: root.bgPresets[index].bg
-                        border.color: root.bgColor === root.bgPresets[index].bg ? root.textColor : "#ccc"
-                        border.width: root.bgColor === root.bgPresets[index].bg ? 2 : 1
-                        Text { anchors.centerIn: parent; text: root.bgPresets[index].name; font.pixelSize: 9; color: root.bgPresets[index].fg }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.bgColor = root.bgPresets[index].bg; root.textColor = root.bgPresets[index].fg } }
-                    }
-                }
-            }
-
-            // ── Font family ──
-            Text { text: lang === "zh" ? "阅读字体" : "Font"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
-            Grid {
-                columns: 3; spacing: 8; width: parent.width
-                Repeater {
-                    model: [
-                        { label: "Georgia",  val: "Georgia" },
-                        { label: "宋体",     val: "SimSun" },
-                        { label: "楷体",     val: "KaiTi" },
-                        { label: "微软雅黑", val: "Microsoft YaHei" },
-                        { label: "仿宋",     val: "FangSong" },
-                        { label: "霞鹜文楷", val: "LXGW WenKai" },
-                        { label: "朱雀仿宋", val: "Zhuque Fangsong (technical preview)" },
-                        { label: "小赖字体", val: "Xiaolai" }
-                    ]
-                    Rectangle {
-                        width: (parent.width - 2 * parent.spacing) / 3; height: 30; radius: 6
-                        color: root.fontFamily === modelData.val ? _activeBg : "transparent"
-                        border.color: _panelBorder
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData.label
-                            color: root.textColor; opacity: root.fontFamily === modelData.val ? 1.0 : 0.6
-                            font.pixelSize: 11
-                            font.family: modelData.val
-                        }
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: root.fontFamily = modelData.val
-                        }
-                    }
-                }
-            }
-
-            // ── Font size (custom stepper slider) ──
-            Text { text: lang === "zh" ? "字体大小" : "Font Size"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
-            Row {
-                spacing: 0; width: parent.width
-                Rectangle {
-                    width: 36; height: 32; radius: 6; color: fsMinus.containsMouse ? _hoverBg : "transparent"
-                    Text { anchors.centerIn: parent; text: "A"; color: root.textColor; opacity: 0.6; font.pixelSize: 12 }
-                    MouseArea { id: fsMinus; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root.fontSize > 14) root.fontSize-- } }
-                }
-                Item {
-                    width: parent.width - 72; height: 32
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width - 16; height: 3; x: 8; radius: 1.5; color: _isDark ? "#444466" : "#d8d4ce" }
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; x: 8; height: 3; width: (root.fontSize - 14) / 14 * (parent.width - 16); radius: 1.5; color: _isDark ? "#8888bb" : "#a09888" }
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        x: 8 + (root.fontSize - 14) / 14 * (parent.width - 16) - 10
-                        width: 20; height: 20; radius: 10
-                        color: _isDark ? "#aaaadd" : "#7a7060"
-                        Text { anchors.centerIn: parent; text: root.fontSize; color: "#fff"; font.pixelSize: 9; font.weight: Font.Bold }
-                    }
-                    MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                        onClicked: function(mouse) { var r = Math.max(0, Math.min(1, (mouse.x - 8) / (parent.width - 16))); root.fontSize = Math.round(14 + r * 14) }
-                        onPositionChanged: function(mouse) { if (pressed) { var r = Math.max(0, Math.min(1, (mouse.x - 8) / (parent.width - 16))); root.fontSize = Math.round(14 + r * 14) } }
-                    }
-                }
-                Rectangle {
-                    width: 36; height: 32; radius: 6; color: fsPlus.containsMouse ? _hoverBg : "transparent"
-                    Text { anchors.centerIn: parent; text: "A"; color: root.textColor; opacity: 0.6; font.pixelSize: 16; font.weight: Font.DemiBold }
-                    MouseArea { id: fsPlus; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root.fontSize < 28) root.fontSize++ } }
-                }
-            }
-
-            // ── Page margin (custom stepper slider) ──
-            Text { text: lang === "zh" ? "页面边距" : "Margin"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
-            Row {
-                spacing: 0; width: parent.width
-                Rectangle {
-                    width: 36; height: 32; radius: 6; color: mgMinus.containsMouse ? _hoverBg : "transparent"
-                    Text { anchors.centerIn: parent; text: "−"; color: root.textColor; opacity: 0.6; font.pixelSize: 16 }
-                    MouseArea { id: mgMinus; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root.pageMargin > 10) root.pageMargin -= 5 } }
-                }
-                Item {
-                    width: parent.width - 72; height: 32
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width - 16; height: 3; x: 8; radius: 1.5; color: _isDark ? "#444466" : "#d8d4ce" }
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; x: 8; height: 3; width: (root.pageMargin - 10) / 110 * (parent.width - 16); radius: 1.5; color: _isDark ? "#8888bb" : "#a09888" }
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        x: 8 + (root.pageMargin - 10) / 110 * (parent.width - 16) - 10
-                        width: 20; height: 20; radius: 10
-                        color: _isDark ? "#aaaadd" : "#7a7060"
-                        Text { anchors.centerIn: parent; text: root.pageMargin; color: "#fff"; font.pixelSize: 9; font.weight: Font.Bold }
-                    }
-                    MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                        onClicked: function(mouse) { var r = Math.max(0, Math.min(1, (mouse.x - 8) / (parent.width - 16))); root.pageMargin = Math.round((10 + r * 110) / 5) * 5 }
-                        onPositionChanged: function(mouse) { if (pressed) { var r = Math.max(0, Math.min(1, (mouse.x - 8) / (parent.width - 16))); root.pageMargin = Math.round((10 + r * 110) / 5) * 5 } }
-                    }
-                }
-                Rectangle {
-                    width: 36; height: 32; radius: 6; color: mgPlus.containsMouse ? _hoverBg : "transparent"
-                    Text { anchors.centerIn: parent; text: "+"; color: root.textColor; opacity: 0.6; font.pixelSize: 16 }
-                    MouseArea { id: mgPlus; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root.pageMargin < 120) root.pageMargin += 5 } }
-                }
-            }
-
-            // ── Paragraph spacing (custom stepper slider) ──
-            Text { text: lang === "zh" ? "段间距" : "Spacing"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
-            Row {
-                spacing: 0; width: parent.width
-                Rectangle {
-                    width: 36; height: 32; radius: 6; color: psMinus.containsMouse ? _hoverBg : "transparent"
-                    Text { anchors.centerIn: parent; text: "−"; color: root.textColor; opacity: 0.6; font.pixelSize: 16 }
-                    MouseArea { id: psMinus; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root.paragraphSpacing > 0) root.paragraphSpacing-- } }
-                }
-                Item {
-                    width: parent.width - 72; height: 32
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width - 16; height: 3; x: 8; radius: 1.5; color: _isDark ? "#444466" : "#d8d4ce" }
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; x: 8; height: 3; width: root.paragraphSpacing / 10 * (parent.width - 16); radius: 1.5; color: _isDark ? "#8888bb" : "#a09888" }
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        x: 8 + root.paragraphSpacing / 10 * (parent.width - 16) - 10
-                        width: 20; height: 20; radius: 10
-                        color: _isDark ? "#aaaadd" : "#7a7060"
-                        Text { anchors.centerIn: parent; text: root.paragraphSpacing; color: "#fff"; font.pixelSize: 9; font.weight: Font.Bold }
-                    }
-                    MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                        onClicked: function(mouse) { var r = Math.max(0, Math.min(1, (mouse.x - 8) / (parent.width - 16))); root.paragraphSpacing = Math.round(r * 10) }
-                        onPositionChanged: function(mouse) { if (pressed) { var r = Math.max(0, Math.min(1, (mouse.x - 8) / (parent.width - 16))); root.paragraphSpacing = Math.round(r * 10) } }
-                    }
-                }
-                Rectangle {
-                    width: 36; height: 32; radius: 6; color: psPlus.containsMouse ? _hoverBg : "transparent"
-                    Text { anchors.centerIn: parent; text: "+"; color: root.textColor; opacity: 0.6; font.pixelSize: 16 }
-                    MouseArea { id: psPlus; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { if (root.paragraphSpacing < 10) root.paragraphSpacing++ } }
-                }
-            }
-
-            // ── PDF Page Size ──
-            Text {
-                text: lang === "zh" ? "页面大小" : "Page Size"
-                visible: root.bookFormat === "pdf"
-                color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold
-            }
-            Row {
-                visible: root.bookFormat === "pdf"
-                spacing: 10
-                Repeater {
-                    model: [
-                        { label: lang === "zh" ? "原始大小" : "Original", val: "original" },
-                        { label: lang === "zh" ? "适应宽度" : "Fit Width", val: "fit_width" },
-                        { label: lang === "zh" ? "自动缩放" : "Fit Page", val: "fit_page" }
-                    ]
-                    Rectangle {
-                        width: 80; height: 30; radius: 6
-                        color: root.pdfFitMode === modelData.val ? _activeBg : "transparent"
-                        border.color: _panelBorder
-                        Text { anchors.centerIn: parent; text: modelData.label; color: root.textColor; opacity: 0.7; font.pixelSize: 11 }
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                root.pdfFitMode = modelData.val
-                                root.pdfZoom = 1.0
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ── Reading mode ──
-            Text { text: lang === "zh" ? "阅读方式" : "Mode"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
-            Row {
-                spacing: 10
-                Repeater {
-                    model: [{ label: lang === "zh" ? "下拉" : "Scroll", val: "scroll" }, { label: lang === "zh" ? "翻页" : "Paged", val: "paginated" }]
-                    Rectangle {
-                        width: 70; height: 30; radius: 6
-                        color: root.readingMode === modelData.val ? _activeBg : "transparent"
-                        border.color: _panelBorder
-                        Text { anchors.centerIn: parent; text: modelData.label; color: root.textColor; opacity: 0.7; font.pixelSize: 13 }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.readingMode = modelData.val; jumpToPage(0) } }
-                    }
-                }
-            }
-
-            // ── Layout ──
-            Text { text: lang === "zh" ? "页面布局" : "Layout"; color: root.textColor; opacity: 0.7; font.pixelSize: 13; font.weight: Font.DemiBold }
-            Row {
-                spacing: 10
-                Repeater {
-                    model: [{ label: lang === "zh" ? "单页" : "Single", val: false }, { label: lang === "zh" ? "双页" : "Dual", val: true }]
-                    Rectangle {
-                        width: 70; height: 30; radius: 6
-                        color: root.dualPage === modelData.val ? _activeBg : "transparent"
-                        border.color: _panelBorder
-                        Text { anchors.centerIn: parent; text: modelData.label; color: root.textColor; opacity: 0.7; font.pixelSize: 13 }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.dualPage = modelData.val; jumpToPage(0) } }
-                    }
-                }
-            }
-        }
-        }
+    // ── Notes Panel (right side) ────────────────────────────────
+    NotesPanel {
+        id: notesPanel
+        reader: root
+        visible: root._notesVisible; z: 20
+        anchors.top: topBar.bottom
+        anchors.topMargin: 8
+        anchors.right: parent.right; anchors.rightMargin: 12
+        height: Math.min(root._annotations.length === 0 ? 260 : root._annotations.length * 110 + 80, root.height - topBar.height - 24)
     }
 
     // Click outside to close panels
     MouseArea {
         anchors.fill: parent; z: 15
         visible: tocPanel.visible || settingsPanel.visible || root._notesVisible
-        onClicked: { tocPanel.visible = false; settingsPanel.visible = false; root._notesVisible = false }
+        onClicked: { tocPanel.visible = false; settingsPanel.visible = false; root._notesVisible = false; root.forceActiveFocus() }
     }
 
     // ── Reading Area ────────────────────────────────────────────
@@ -886,8 +849,9 @@ Rectangle {
         visible: text !== ""
         wrapMode: Text.Wrap
         horizontalAlignment: Text.AlignHCenter
-        color: root.textColor
-        font.pixelSize: 14
+        color: root._palette.danger
+        font.family: Theme.uiFont
+        font.pixelSize: Theme.fontSmall
         z: 12
     }
     Item {
@@ -943,7 +907,7 @@ Rectangle {
                     y: (pdfCanvas.height - height) / 2
                     radius: 8
                     color: "#ffffff"
-                    border.color: "#e0ddd8"
+                    border.color: root._palette.border
                 }
 
                 Image {
@@ -958,7 +922,8 @@ Rectangle {
 
                     source: {
                         if (root.bookFormat === "pdf" && backend && root.bookId && pdfFlickable.currentPdfPage >= 0) {
-                            return "file:///" + backend.renderPdfPage(root.bookId, pdfFlickable.currentPdfPage, 2.0)
+                            var rendered = backend.renderPdfPage(root.bookId, pdfFlickable.currentPdfPage, 2.0)
+                            return rendered ? "file:///" + rendered : ""
                         }
                         return ""
                     }
@@ -991,19 +956,19 @@ Rectangle {
 
             onWidthChanged: updateScale()
             onHeightChanged: updateScale()
-            onCurrentPdfPageChanged: syncPdfChapterFromPage(currentPdfPage)
+            onCurrentPdfPageChanged: { syncPdfChapterFromPage(currentPdfPage); progressSaveTimer.restart() }
 
             // Page indicator
             Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom; anchors.bottomMargin: 20
                 width: pageText.implicitWidth + 20; height: 30
-                radius: 15; color: "#80000000"
+                radius: 15; color: root._palette.inverse; opacity: 0.85
                 Text {
                     id: pageText
                     anchors.centerIn: parent
                     text: (pdfFlickable.currentPdfPage + 1) + " / " + pdfFlickable.totalPdfPages
-                    color: "#ffffff"; font.pixelSize: 12
+                    color: root._palette.textOnInverse; font.family: Theme.uiFont; font.pixelSize: Theme.fontCaption; font.features: Theme.tabular
                 }
             }
 
@@ -1014,7 +979,7 @@ Rectangle {
                 width: 40; height: 40; radius: 20
                 color: prevPdfMa.containsMouse ? "#80000000" : "#60000000"
                 visible: pdfFlickable.currentPdfPage > 0
-                Text { anchors.centerIn: parent; text: "◀"; color: "#ffffff"; font.pixelSize: 16 }
+                LucideIcon { anchors.centerIn: parent; name: "chevron-left"; size: 20; color: "#ffffff" }
                 MouseArea {
                     id: prevPdfMa
                     anchors.fill: parent
@@ -1036,7 +1001,7 @@ Rectangle {
                 width: 40; height: 40; radius: 20
                 color: nextPdfMa.containsMouse ? "#80000000" : "#60000000"
                 visible: pdfFlickable.currentPdfPage < pdfFlickable.totalPdfPages - 1
-                Text { anchors.centerIn: parent; text: "▶"; color: "#ffffff"; font.pixelSize: 16 }
+                LucideIcon { anchors.centerIn: parent; name: "chevron-right"; size: 20; color: "#ffffff" }
                 MouseArea {
                     id: nextPdfMa
                     anchors.fill: parent
@@ -1100,6 +1065,7 @@ Rectangle {
             contentHeight: scrollTextEdit.implicitHeight
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
+            onContentYChanged: progressSaveTimer.restart()
 
             // Highlight underlay canvas
             Canvas {
@@ -1124,7 +1090,7 @@ Rectangle {
                         if (idx < 0) continue
 
                         ctx.fillStyle = ann.color
-                        ctx.globalAlpha = 0.28
+                        ctx.globalAlpha = ann.id === root._flashAnnotationId ? 0.6 : 0.28
 
                         var endPos = idx + needle.length
                         var startRect = scrollTextEdit.positionToRectangle(idx)
@@ -1162,7 +1128,7 @@ Rectangle {
                 readOnly: true
                 selectByMouse: root._annotationMode
                 selectedTextColor: root.textColor
-                selectionColor: "#50FFEB3B"
+                selectionColor: Qt.rgba(root._palette.accent.r, root._palette.accent.g, root._palette.accent.b, 0.28)
                 z: 1
 
                 onSelectedTextChanged: {
@@ -1198,13 +1164,9 @@ Rectangle {
                     var textPos = scrollTextEdit.positionAt(mouse.x, mouse.y)
                     var hitAnn = root._findAnnotationAt(textPos)
                     if (hitAnn) {
-                        root._commentTargetId = hitAnn.id
-                        highlightContextMenu.x = mouse.x
-                        highlightContextMenu.y = readingArea.y + mouse.y - scrollFlickable.contentY
-                        highlightContextMenu._annId = hitAnn.id
-                        highlightContextMenu._annText = hitAnn.text || ""
-                        highlightContextMenu._annComment = hitAnn.comment || ""
-                        highlightContextMenu.visible = true
+                        highlightMenu.annId = hitAnn.id
+                        highlightMenu.annComment = hitAnn.comment || ""
+                        highlightMenu.popup()
                     }
                 }
             }
@@ -1257,6 +1219,17 @@ Rectangle {
                 onContentHeightChanged: paginatedContainer._recalcPages()
             }
 
+            // Measures the text up to a note so a jump lands on the right page
+            Text {
+                id: prefixMeasure
+                visible: false
+                width: layoutHelper.width
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                font.pixelSize: root.fontSize; font.family: root.fontFamily
+                lineHeight: 1.6
+            }
+
             function _recalcPages() {
                 var lc = layoutHelper.lineCount
                 if (lc <= 0) { root._totalPages = 1; return }
@@ -1297,7 +1270,7 @@ Rectangle {
                                 visible: root.dualPage && index === 1
                                 anchors.left: parent.left; anchors.top: parent.top
                                 anchors.bottom: parent.bottom
-                                width: 1; color: _panelBorder
+                                width: 1; color: root._palette.border
                             }
 
                             // Inner clip: exactly fits whole lines, no partial cut
@@ -1333,7 +1306,7 @@ Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom; anchors.bottomMargin: 8
                 text: (root._pageIndex + 1) + " / " + root._totalPages
-                color: root.textColor; opacity: 0.35; font.pixelSize: 12
+                color: root.textColor; opacity: 0.4; font.family: Theme.uiFont; font.pixelSize: Theme.fontCaption; font.features: Theme.tabular
             }
 
             // Click zones for page turning
@@ -1366,386 +1339,109 @@ Rectangle {
     Rectangle {
         id: annotationToolbar
         visible: false; z: 100
-        width: annToolRow.implicitWidth + 20; height: 42; radius: 21
-        color: _isDark ? "#e62a2a3e" : "#e8eeecea"
-        border.color: _isDark ? "#3a3a4e" : "#c8c5c0"
-
-        // Shadow
-        Rectangle {
-            anchors.fill: parent; anchors.margins: -2
-            radius: parent.radius + 2; z: -1
-            color: "transparent"; border.color: "#18000000"; border.width: 3
-        }
+        width: annToolRow.implicitWidth + 16
+        height: 44
+        radius: 22
+        color: root._palette.surface
+        border.color: root._palette.border
 
         RowLayout {
             id: annToolRow
-            anchors.centerIn: parent; spacing: 6
+            anchors.centerIn: parent
+            spacing: 6
 
-            // Highlight color buttons
             Repeater {
                 model: [
-                    { color: "#FFEB3B", name: "黄" },
-                    { color: "#8BC34A", name: "绿" },
-                    { color: "#42A5F5", name: "蓝" },
-                    { color: "#FF7043", name: "红" }
+                    { color: "#E8C547", name: zh("黄色", "Yellow") },
+                    { color: "#7FB069", name: zh("绿色", "Green") },
+                    { color: "#5B9BD5", name: zh("蓝色", "Blue") },
+                    { color: "#E07A5F", name: zh("红色", "Red") }
                 ]
-
-                Rectangle {
-                    width: 26; height: 26; radius: 13
-                    color: modelData.color; opacity: 0.85
-                    border.color: annColorMa.containsMouse ? root.textColor : "transparent"
-                    border.width: 1.5
-
-                    MouseArea {
-                        id: annColorMa; anchors.fill: parent
-                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: root._createHighlight(modelData.color)
+                AbstractButton {
+                    id: swatch
+                    implicitWidth: 28; implicitHeight: 28
+                    hoverEnabled: true
+                    focusPolicy: Qt.StrongFocus
+                    Accessible.name: zh("用", "Highlight ") + modelData.name + zh("划线", "")
+                    onClicked: root._createHighlight(modelData.color)
+                    background: Rectangle {
+                        radius: 14
+                        color: modelData.color
+                        border.color: swatch.hovered ? root.textColor : "transparent"
+                        border.width: 1.5
+                        FocusRing { shown: swatch.visualFocus }
                     }
                 }
             }
-
-            // Divider
-            Rectangle { width: 1; height: 20; color: _panelBorder }
-
-            // Copy button
-            Rectangle {
-                width: 28; height: 28; radius: 14
-                color: annCopyMa.containsMouse ? _hoverBg : "transparent"
-                Text { anchors.centerIn: parent; text: "📋"; font.pixelSize: 14 }
-                MouseArea {
-                    id: annCopyMa; anchors.fill: parent
-                    hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        if (root._selText) {
-                            scrollTextEdit.copy()
-                        }
-                        root._clearSelection()
-                    }
-                }
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 20; color: root._palette.border }
+            IconButton {
+                implicitWidth: 30; implicitHeight: 30; iconSize: 16
+                tone: root._palette
+                iconName: "copy"
+                label: zh("复制", "Copy")
+                onClicked: { if (root._selText) scrollTextEdit.copy(); root._clearSelection() }
             }
         }
     }
 
-    // ── Highlight Right-Click Context Menu ──
-    MouseArea {
-        anchors.fill: parent
-        visible: highlightContextMenu.visible; z: 95
-        onClicked: highlightContextMenu.visible = false
-    }
-
-    Rectangle {
-        id: highlightContextMenu
-        visible: false; z: 100
-        width: 140; height: hCtxCol.implicitHeight + 12
-        radius: 10; color: _panelBg; border.color: _panelBorder
-
-        property string _annId: ""
-        property string _annText: ""
-        property string _annComment: ""
-
-        Column {
-            id: hCtxCol
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.top: parent.top; anchors.margins: 6; spacing: 2
-
-            Rectangle {
-                width: hCtxCol.width; height: 34; radius: 6
-                color: addComMa.containsMouse ? _hoverBg : "transparent"
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left; anchors.leftMargin: 12
-                    text: lang === "zh" ? (highlightContextMenu._annComment ? "编辑评论" : "添加评论") : (highlightContextMenu._annComment ? "Edit Comment" : "Add Comment")
-                    color: root.textColor; opacity: 0.7; font.pixelSize: 13
-                }
-                MouseArea {
-                    id: addComMa; anchors.fill: parent
-                    hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root._commentTargetId = highlightContextMenu._annId
-                        commentTextInput.text = highlightContextMenu._annComment
-                        commentInputOverlay.visible = true
-                        commentTextInput.forceActiveFocus()
-                        highlightContextMenu.visible = false
-                    }
-                }
-            }
-
-            Rectangle {
-                width: hCtxCol.width - 12; height: 1
-                anchors.horizontalCenter: parent.horizontalCenter; color: _panelBorder
-            }
-
-            Rectangle {
-                width: hCtxCol.width; height: 34; radius: 6
-                color: delHighMa.containsMouse ? "#30c05050" : "transparent"
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left; anchors.leftMargin: 12
-                    text: lang === "zh" ? "删除划线" : "Delete Highlight"
-                    color: "#c05050"; font.pixelSize: 13
-                }
-                MouseArea {
-                    id: delHighMa; anchors.fill: parent
-                    hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root._deleteAnnotation(highlightContextMenu._annId)
-                        highlightContextMenu.visible = false
-                    }
-                }
-            }
+    // ── Highlight context menu (right-click on a highlight) ──
+    AppMenu {
+        id: highlightMenu
+        property string annId: ""
+        property string annComment: ""
+        AppMenuItem {
+            text: highlightMenu.annComment ? zh("编辑评论", "Edit comment") : zh("添加评论", "Add comment")
+            iconName: "message"
+            onTriggered: root.editComment({ id: highlightMenu.annId, comment: highlightMenu.annComment })
+        }
+        AppMenuItem {
+            text: zh("删除划线", "Delete highlight")
+            iconName: "trash"
+            destructive: true
+            onTriggered: root._deleteAnnotation(highlightMenu.annId)
         }
     }
 
-    // ── Comment Input Overlay ──
-    Rectangle {
-        id: commentInputOverlay
-        visible: false; z: 200
-        anchors.fill: parent
-        color: "#66282828"
+    // ── Comment dialog ──
+    AppModal {
+        id: commentDialog
+        title: zh("评论", "Comment")
+        preferredWidth: 420
+        showClose: false
+        onOpened: commentField.forceActiveFocus()
+        onClosed: root.forceActiveFocus()
 
-        MouseArea { anchors.fill: parent; onClicked: commentInputOverlay.visible = false }
-
-        Rectangle {
-            anchors.centerIn: parent
-            width: 380; height: 160; radius: 16
-            color: _isDark ? "#2a2a3e" : "#eeecea"
-            border.color: _isDark ? "#3a3a4e" : "#c8c5c0"
-
-            MouseArea { anchors.fill: parent }
-
-            ColumnLayout {
-                anchors.fill: parent; anchors.margins: 24; spacing: 14
-
-                Text {
-                    text: lang === "zh" ? "添加评论" : "Add Comment"
-                    color: root.textColor; font.pixelSize: 16; font.weight: Font.DemiBold
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true; height: 36; radius: 10
-                    color: _isDark ? "#333350" : "#15a09888"
-                    border.color: _isDark ? "#4a4a6e" : "#30a09888"
-
-                    TextInput {
-                        id: commentTextInput
-                        anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12
-                        verticalAlignment: Text.AlignVCenter
-                        color: root.textColor; font.pixelSize: 14
-                        clip: true; selectByMouse: true
-                        onAccepted: root._commitComment()
-
-                        Text {
-                            visible: !commentTextInput.text
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: lang === "zh" ? "写下你的想法..." : "Write your thoughts..."
-                            color: _dimText; font.pixelSize: 13
-                        }
-                    }
-                }
-
-                RowLayout {
-                    spacing: 12; Layout.alignment: Qt.AlignRight
-
-                    Rectangle {
-                        width: 60; height: 32; radius: 8
-                        color: cancelCommentMa.containsMouse ? _hoverBg : "transparent"
-                        border.color: _panelBorder
-                        Text { anchors.centerIn: parent; text: lang === "zh" ? "取消" : "Cancel"; color: _dimText; font.pixelSize: 13 }
-                        MouseArea {
-                            id: cancelCommentMa; anchors.fill: parent
-                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: commentInputOverlay.visible = false
-                        }
-                    }
-
-                    Rectangle {
-                        width: 60; height: 32; radius: 8
-                        color: confirmCommentMa.containsMouse ? (_isDark ? "#4a4a6e" : "#d0ccc4") : (_isDark ? "#3a3a5e" : "#e0dcd4")
-                        Text { anchors.centerIn: parent; text: lang === "zh" ? "保存" : "Save"; color: root.textColor; font.pixelSize: 13 }
-                        MouseArea {
-                            id: confirmCommentMa; anchors.fill: parent
-                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: root._commitComment()
-                        }
-                    }
-                }
+        TextArea {
+            id: commentField
+            Layout.fillWidth: true
+            Layout.preferredHeight: 96
+            placeholderText: zh("写下你的想法", "Write your thoughts")
+            wrapMode: TextArea.Wrap
+            color: Theme.text
+            placeholderTextColor: Theme.textTertiary
+            selectionColor: Theme.accentSoft
+            selectedTextColor: Theme.text
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.fontBody
+            Accessible.name: zh("评论内容", "Comment")
+            Keys.onReturnPressed: (event) => {
+                if (event.modifiers & Qt.ShiftModifier) event.accepted = false
+                else root._commitComment()
+            }
+            background: Rectangle {
+                radius: Theme.radiusM
+                color: Theme.bg
+                border.color: commentField.activeFocus ? Theme.accent : Theme.border
+                border.width: commentField.activeFocus ? 1.5 : 1
             }
         }
+        footer: [
+            AppButton { text: zh("取消", "Cancel"); variant: "ghost"; onClicked: commentDialog.close() },
+            AppButton { text: zh("保存", "Save"); variant: "primary"; onClicked: root._commitComment() }
+        ]
     }
 
-    // ── Notes Panel (right side) ──
-    // Sorted by position (start index), each highlight in a rounded card
-    Rectangle {
-        id: notesPanel
-        visible: root._notesVisible; z: 20
-        anchors.top: topBar.bottom
-        anchors.right: parent.right; anchors.rightMargin: 20
-        width: 340; height: Math.min(root._annotations.length * 100 + 70, root.height * 0.8)
-        radius: 12; color: _panelBg; border.color: _panelBorder
-
-        MouseArea { anchors.fill: parent; z: 0 }
-
-        ColumnLayout {
-            anchors.fill: parent; anchors.margins: 14; spacing: 0
-
-            // Header
-            RowLayout {
-                Layout.fillWidth: true; spacing: 8
-                Layout.bottomMargin: 10
-
-                Text {
-                    text: lang === "zh" ? "笔记 · " + root._annotations.length : "Notes · " + root._annotations.length
-                    color: root.textColor; opacity: 0.8
-                    font.pixelSize: 15; font.weight: Font.DemiBold
-                    Layout.fillWidth: true
-                }
-
-                Text {
-                    text: "✕"; color: _dimText; font.pixelSize: 14
-                    MouseArea {
-                        anchors.fill: parent; anchors.margins: -6
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root._notesVisible = false
-                    }
-                }
-            }
-
-            // Sorted annotations list
-            ListView {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                clip: true; spacing: 8
-                model: {
-                    // Sort annotations by start position
-                    var sorted = root._annotations.slice()
-                    sorted.sort(function(a, b) {
-                        var ca = a.chapter_index || 0
-                        var cb = b.chapter_index || 0
-                        if (ca !== cb) return ca - cb
-                        return (a.start || 0) - (b.start || 0)
-                    })
-                    return sorted
-                }
-
-                delegate: Rectangle {
-                    width: ListView.view ? ListView.view.width : 300
-                    height: noteCardCol.implicitHeight + 20
-                    radius: 10
-                    color: _isDark ? "#22ffffff" : "#10908880"
-                    border.color: _isDark ? "#28ffffff" : "#18908880"
-                    border.width: 0.5
-
-                    property var ann: modelData
-
-                    ColumnLayout {
-                        id: noteCardCol
-                        anchors.left: parent.left; anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 10
-                        spacing: 6
-
-                        // Highlighted text with color bar
-                        RowLayout {
-                            spacing: 8; Layout.fillWidth: true
-
-                            Rectangle {
-                                width: 3; height: Math.max(noteTextLabel.implicitHeight, 20); radius: 1.5
-                                color: ann ? ann.color : "#FFEB3B"
-                                Layout.alignment: Qt.AlignTop
-                            }
-
-                            Text {
-                                id: noteTextLabel
-                                text: ann ? ann.text : ""
-                                color: root.textColor; opacity: 0.85
-                                font.pixelSize: 13
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                            }
-                        }
-
-                        // Comment (if any) - small light text below
-                        Text {
-                            visible: ann && ann.comment && ann.comment.length > 0
-                            text: ann ? (ann.comment || "") : ""
-                            color: root.textColor; opacity: 0.45
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 11
-                        }
-
-                        // Bottom row: chapter info + actions
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 6
-                            Layout.leftMargin: 11
-
-                            Text {
-                                text: {
-                                    if (!ann) return ""
-                                    if (ann.chapter_index >= 0 && ann.chapter_index < chapterModel.count)
-                                        return chapterModel.get(ann.chapter_index).title
-                                    return ""
-                                }
-                                color: _dimText; font.pixelSize: 9
-                                elide: Text.ElideRight; Layout.fillWidth: true
-                            }
-
-                            // Edit comment icon
-                            Text {
-                                text: "✎"; font.pixelSize: 11; color: _dimText; opacity: 0.6
-                                MouseArea {
-                                    anchors.fill: parent; anchors.margins: -4
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        if (ann) {
-                                            root._commentTargetId = ann.id
-                                            commentTextInput.text = ann.comment || ""
-                                            commentInputOverlay.visible = true
-                                            commentTextInput.forceActiveFocus()
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Delete icon
-                            Text {
-                                text: "✕"; font.pixelSize: 10; color: _dimText; opacity: 0.5
-                                MouseArea {
-                                    anchors.fill: parent; anchors.margins: -4
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        if (ann) root._deleteAnnotation(ann.id)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    MouseArea {
-                        id: noteItemMa; anchors.fill: parent; z: -1
-                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            // Navigate to the annotation's chapter
-                            if (ann && ann.chapter_index >= 0 && ann.chapter_index !== currentChapter) {
-                                loadChapterByIndex(ann.chapter_index)
-                            }
-                            root._notesVisible = false
-                        }
-                    }
-                }
-            }
-
-            // Empty state
-            Text {
-                visible: root._annotations.length === 0
-                text: lang === "zh" ? "暂无笔记\n开启「划线」模式后选择文字即可标记" : "No notes yet\nEnable \"Mark\" mode and select text"
-                color: _dimText; font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
-                Layout.alignment: Qt.AlignHCenter
-                Layout.topMargin: 20
-            }
-        }
-    }
+    Toast { id: toast }
 
     // ── Reading Progress Bar (floating pill) ───────────────────
     Item {
@@ -1781,45 +1477,21 @@ Rectangle {
             return (scrollFlickable.contentY + scrollFlickable.height) / scrollFlickable.contentHeight
         }
 
-        // Shadow
-        Rectangle {
-            anchors.fill: progressPill
-            anchors.margins: -2
-            radius: progressPill.radius + 2
-            color: "#00000000"
-            border.color: "#18000000"
-            border.width: 4
-            opacity: progressPill.opacity
-        }
-
         // Main pill
         Rectangle {
             id: progressPill
             anchors.fill: parent
             radius: 26
-            color: _isDark ? "#e62a2a3e" : "#e0eeecea"
-            border.color: _isDark ? "#3a3a4e" : "#40c8c0b0"
-            border.width: 0.5
+            color: root._palette.surface
+            border.color: root._palette.border
+            border.width: 1
 
             opacity: root._progressBarVisible ? 1.0 : 0.0
-            Behavior on opacity { NumberAnimation { duration: 350; easing.type: Easing.InOutQuad } }
-
-            scale: root._progressBarVisible ? 1.0 : 0.92
-            Behavior on scale { NumberAnimation { duration: 350; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
+            Behavior on opacity { NumberAnimation { duration: Theme.base; easing.type: Easing.OutCubic } }
 
             transform: Translate {
-                y: root._progressBarVisible ? 0 : 20
-                Behavior on y { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
-            }
-
-            // Inner highlight
-            Rectangle {
-                anchors.fill: parent; anchors.margins: 1
-                radius: parent.radius - 1
-                gradient: Gradient {
-                    GradientStop { position: 0.0; color: "#15ffffff" }
-                    GradientStop { position: 1.0; color: "#00ffffff" }
-                }
+                y: root._progressBarVisible ? 0 : 8
+                Behavior on y { NumberAnimation { duration: Theme.base; easing.type: Easing.OutCubic } }
             }
 
             RowLayout {
@@ -1829,8 +1501,8 @@ Rectangle {
 
                 Text {
                     text: Math.round(progressBar.progress * 100) + "%"
-                    color: root.textColor; opacity: 0.6
-                    font.pixelSize: 12; font.weight: Font.DemiBold
+                    color: root.textColor; opacity: 0.7
+                    font.family: Theme.uiFont; font.pixelSize: Theme.fontCaption; font.weight: Font.DemiBold; font.features: Theme.tabular
                     Layout.preferredWidth: 36
                 }
 
@@ -1842,13 +1514,13 @@ Rectangle {
                     Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width; height: 4; radius: 2
-                        color: _isDark ? "#444466" : "#d8d4ce"
+                        color: root._palette.sunken
 
                         // Filled track
                         Rectangle {
                             width: parent.width * progressBar.progress
                             height: parent.height; radius: 2
-                            color: _isDark ? "#8888bb" : "#a09888"
+                            color: root._palette.accent
                             Behavior on width { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
                         }
                     }
@@ -1861,8 +1533,7 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             x: root._chapterMarkers[index].ratio * trackArea.width - 1
                             width: 2; height: 10; radius: 1
-                            color: _isDark ? "#6666aa" : "#b0a890"
-                            opacity: 0.7
+                            color: root._palette.borderStrong
 
                             // Hover area for tooltip
                             MouseArea {
@@ -1890,16 +1561,16 @@ Rectangle {
                         y: -height - 8
                         width: tooltipText.implicitWidth + 16
                         height: 26; radius: 6
-                        color: _isDark ? "#dd2a2a3e" : "#ddeeecea"
-                        border.color: _isDark ? "#3a3a4e" : "#c8c5c0"
+                        color: root._palette.surface
+                        border.color: root._palette.border
 
                         property alias text: tooltipText.text
 
                         Text {
                             id: tooltipText
                             anchors.centerIn: parent
-                            color: root.textColor; opacity: 0.8
-                            font.pixelSize: 11
+                            color: root._palette.text
+                            font.family: Theme.uiFont; font.pixelSize: Theme.fontCaption
                             elide: Text.ElideRight
                             maximumLineCount: 1
                         }
@@ -1910,7 +1581,9 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         x: parent.width * progressBar.progress - 7
                         width: 14; height: 14; radius: 7
-                        color: _isDark ? "#aaaadd" : "#7a7060"
+                        color: root._palette.surface
+                        border.color: root._palette.accent
+                        border.width: 2
                         Behavior on x { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
                     }
 
@@ -1974,8 +1647,8 @@ Rectangle {
                         return ""
                     }
                     visible: text !== ""
-                    color: root.textColor; opacity: 0.5
-                    font.pixelSize: 11
+                    color: root.textColor; opacity: 0.6
+                    font.family: Theme.uiFont; font.pixelSize: Theme.fontCaption; font.features: Theme.tabular
                     Layout.preferredWidth: 50
                     horizontalAlignment: Text.AlignRight
                 }

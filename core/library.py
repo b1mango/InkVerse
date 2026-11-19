@@ -100,8 +100,26 @@ def delete_book(book_id: str) -> None:
         p = book.get(key, "")
         if p and Path(p).resolve() not in referenced and Path(p).exists():
             Path(p).unlink(missing_ok=True)
-    data["books"] = [b for b in data["books"] if b.get("id") != book_id]
+    data["books"] = remaining
+    for folder in data.get("folders", []):
+        ids = folder.get("book_ids", [])
+        if book_id in ids:
+            folder["book_ids"] = [i for i in ids if i != book_id]
     _save_metadata(data)
+    _ann_path(book_id).unlink(missing_ok=True)
+
+
+@serialized
+def save_reading_progress(book_id: str, chapter: int, ratio: float) -> None:
+    """Remember where the reader stopped: chapter row (or PDF page) and position inside it."""
+    try:
+        chapter = int(chapter)
+        ratio = float(ratio)
+    except (TypeError, ValueError):
+        return
+    if ratio != ratio:  # NaN
+        ratio = 0.0
+    update_book(book_id, progress={"chapter": max(-1, chapter), "ratio": min(1.0, max(0.0, ratio))})
 
 
 @serialized

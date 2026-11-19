@@ -1,280 +1,185 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
 import "../components"
+import "../theme"
 
-/*  SettingsPage – 水墨风设置页  */
+/*  SettingsPage – 外观、语言、默认阅读字体；每项改动即时生效并保存  */
 Item {
     id: root
+    property string lang: "zh"
+    property string themePreference: "system"
+    property string readingFont: "LXGW WenKai"
+    signal themeChosen(string value)
+    signal languageChosen(string value)
+    signal readingFontChosen(string value)
 
-    property string currentLanguage: "zh"
-    property string currentTheme: "ink"
-    signal languageChanged(string lang)
-    signal themeChanged(string theme)
-    property string currentFont: "Long Cang"
-    signal fontChanged(string font)
-
-    // Ink palette
-    readonly property string _ink:      "#2a2420"
-    readonly property string _inkLight: "#5a5040"
-    readonly property string _inkDim:   "#8a7e70"
-
-    ColumnLayout {
+    ScrollView {
+        id: scroller
         anchors.fill: parent
-        anchors.margins: 50
-        anchors.topMargin: 40
-        spacing: 30
+        contentWidth: availableWidth
 
-        Text {
-            text: currentLanguage === "zh" ? "设置" : "Settings"
-            color: _ink
-            font.pixelSize: 32
-            font.weight: root.currentFont === "HYXinHaiXingKaiW" ? Font.Medium : Font.Bold
-            font.family: root.currentFont
-        }
+        ColumnLayout {
+            width: Math.min(scroller.availableWidth - 2 * Theme.pagePadding, 680)
+            x: Theme.pagePadding
+            spacing: 0
 
-        // ── Theme Section ──
-        GlassPanel {
-            Layout.fillWidth: true
-            Layout.preferredHeight: themeCol.implicitHeight + 50
+            Text {
+                Layout.topMargin: 36
+                Layout.bottomMargin: 24
+                text: lang === "zh" ? "设置" : "Settings"
+                color: Theme.text
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.fontH1
+                font.weight: Font.DemiBold
+                Accessible.role: Accessible.Heading
+            }
 
-            ColumnLayout {
-                id: themeCol
-                anchors.fill: parent; anchors.margins: 25
-                spacing: 16
+            SectionLabel { text: lang === "zh" ? "通用" : "General" }
+            Card {
+                Layout.fillWidth: true
+                Layout.preferredHeight: generalCol.implicitHeight
 
-                Text {
-                    text: currentLanguage === "zh" ? "主题风格" : "Theme"
-                    color: _inkLight
-                    font.pixelSize: 16; font.weight: Font.DemiBold
+                ColumnLayout {
+                    id: generalCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    spacing: 0
+
+                    SettingRow {
+                        title: lang === "zh" ? "外观" : "Appearance"
+                        SegmentedControl {
+                            value: root.themePreference
+                            options: [
+                                { label: lang === "zh" ? "跟随系统" : "System", value: "system", icon: "monitor" },
+                                { label: lang === "zh" ? "浅色" : "Light", value: "light", icon: "sun" },
+                                { label: lang === "zh" ? "深色" : "Dark", value: "dark", icon: "moon" }
+                            ]
+                            onActivated: (v) => root.themeChosen(v)
+                        }
+                    }
+                    Rectangle { Layout.fillWidth: true; Layout.leftMargin: 16; implicitHeight: 1; color: Theme.border }
+                    SettingRow {
+                        title: lang === "zh" ? "语言" : "Language"
+                        SegmentedControl {
+                            value: root.lang
+                            options: [{ label: "中文", value: "zh" }, { label: "English", value: "en" }]
+                            onActivated: (v) => root.languageChosen(v)
+                        }
+                    }
                 }
+            }
 
-                Row {
-                    spacing: 16
+            SectionLabel { text: lang === "zh" ? "默认阅读字体" : "Reading typeface" }
+            GridLayout {
+                id: fontGrid
+                Layout.fillWidth: true
+                columns: Math.max(2, Math.floor((width + columnSpacing) / (180 + columnSpacing)))
+                columnSpacing: 10
+                rowSpacing: 10
 
-                    // ── Ink Wash theme ──
-                    Rectangle {
-                        width: 160; height: 100; radius: 12
-                        color: root.currentTheme === "ink" ? "#25a09888" : "#10a09888"
-                        border.color: root.currentTheme === "ink" ? "#70a09888" : "#30a09888"
-                        border.width: root.currentTheme === "ink" ? 2 : 1
+                Repeater {
+                    model: Theme.readingFonts
+                    delegate: AbstractButton {
+                        id: fontCard
+                        readonly property bool selected: root.readingFont === modelData.family
+                        Layout.fillWidth: true
+                        implicitHeight: 88
+                        hoverEnabled: true
+                        focusPolicy: Qt.StrongFocus
+                        Accessible.name: modelData.label
+                        Accessible.role: Accessible.RadioButton
+                        Accessible.checked: selected
+                        onClicked: root.readingFontChosen(modelData.family)
 
-                        ColumnLayout {
-                            anchors.centerIn: parent
-                            spacing: 6
-
-                            Rectangle {
-                                Layout.alignment: Qt.AlignHCenter
-                                width: 60; height: 36; radius: 6
-                                color: "#e0dcd8"
-                                clip: true
-                                Image {
-                                    anchors.fill: parent
-                                    source: "../../assets/images/background.png"
-                                    fillMode: Image.PreserveAspectCrop
-                                    opacity: 0.4
-                                }
-                            }
-
+                        background: Rectangle {
+                            radius: Theme.radiusL
+                            color: fontCard.hovered && !fontCard.selected ? Theme.surfaceHover : Theme.surface
+                            border.color: fontCard.selected ? Theme.accent : Theme.border
+                            border.width: fontCard.selected ? 1.5 : 1
+                            FocusRing { shown: fontCard.visualFocus }
+                        }
+                        contentItem: ColumnLayout {
+                            spacing: 4
                             Text {
-                                text: currentLanguage === "zh" ? "水墨" : "Ink Wash"
-                                color: _ink
-                                font.pixelSize: 14
-                                font.weight: Font.DemiBold
-                                font.family: root.currentFont
-                                Layout.alignment: Qt.AlignHCenter
+                                Layout.leftMargin: 16
+                                text: "墨界水云 Ink"
+                                color: Theme.text
+                                font.family: modelData.family
+                                font.pixelSize: 20
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                                Layout.rightMargin: 16
                             }
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: { root.currentTheme = "ink"; root.themeChanged("ink") }
-                        }
-                    }
-
-                    // ── Cream theme ──
-                    Rectangle {
-                        width: 160; height: 100; radius: 12
-                        color: root.currentTheme === "cream" ? "#25a09888" : "#10a09888"
-                        border.color: root.currentTheme === "cream" ? "#70a09888" : "#30a09888"
-                        border.width: root.currentTheme === "cream" ? 2 : 1
-
-                        ColumnLayout {
-                            anchors.centerIn: parent
-                            spacing: 6
-
-                            Rectangle {
-                                Layout.alignment: Qt.AlignHCenter
-                                width: 60; height: 36; radius: 6
-                                color: "#eeecea"
-                                clip: true
-                                Image {
-                                    anchors.fill: parent
-                                    source: "../../assets/images/bg_landscape.svg"
-                                    fillMode: Image.PreserveAspectCrop
-                                    opacity: 0.6
-                                }
-                            }
-
-                            Text {
-                                text: currentLanguage === "zh" ? "素笺" : "Parchment"
-                                color: _ink
-                                font.pixelSize: 14
-                                font.weight: Font.DemiBold
-                                font.family: root.currentFont
-                                Layout.alignment: Qt.AlignHCenter
-                            }
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: { root.currentTheme = "cream"; root.themeChanged("cream") }
-                        }
-                    }
-                }
-
-                Text {
-                    text: currentLanguage === "zh"
-                        ? "切换应用整体视觉风格"
-                        : "Switch the overall visual style"
-                    color: _inkDim; font.pixelSize: 12
-                }
-            }
-        }
-
-        // ── Font Section ──
-        GlassPanel {
-            Layout.fillWidth: true
-            Layout.preferredHeight: fontCol.implicitHeight + 50
-
-            ColumnLayout {
-                id: fontCol
-                anchors.fill: parent; anchors.margins: 25
-                spacing: 16
-
-                Text {
-                    text: currentLanguage === "zh" ? "字体设置" : "Font"
-                    color: _inkLight
-                    font.pixelSize: 16; font.weight: Font.DemiBold
-                }
-
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: 12
-
-                    Repeater {
-                        model: [
-                            { name: "Long Cang", label: "龙藏体", desc: "行书" },
-                            { name: "汉仪行楷简", label: "汉仪行楷简", desc: "行楷" },
-                            { name: "HYXinHaiXingKaiW", label: "心海行楷", desc: "行楷" },
-                            { name: "Ma Shan Zheng", label: "马善政楷", desc: "楷书" },
-                            { name: "LXGW WenKai", label: "霞鹜文楷", desc: "楷体" }
-                        ]
-
-                        Rectangle {
-                            width: 140; height: 64; radius: 10
-                            color: root.currentFont === modelData.name ? "#25a09888" : "#10a09888"
-                            border.color: root.currentFont === modelData.name ? "#70a09888" : "#30a09888"
-                            border.width: root.currentFont === modelData.name ? 2 : 1
-
-                            ColumnLayout {
-                                anchors.centerIn: parent
-                                spacing: 2
-
+                            RowLayout {
+                                Layout.leftMargin: 16
+                                Layout.rightMargin: 12
                                 Text {
-                                    text: "墨界水云"
-                                    color: _ink
-                                    font.pixelSize: 18
-                                    font.family: modelData.name
-                                    font.weight: modelData.name === "HYXinHaiXingKaiW" ? Font.Light : Font.Normal
-                                    Layout.alignment: Qt.AlignHCenter
+                                    Layout.fillWidth: true
+                                    text: lang === "zh" ? modelData.label : modelData.en
+                                    color: Theme.textSecondary
+                                    font.family: Theme.uiFont
+                                    font.pixelSize: Theme.fontCaption
                                 }
-                                Text {
-                                    text: modelData.label + " · " + modelData.desc
-                                    color: _inkDim
-                                    font.pixelSize: 9
-                                    Layout.alignment: Qt.AlignHCenter
-                                }
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                onClicked: { root.currentFont = modelData.name; root.fontChanged(modelData.name) }
+                                LucideIcon { visible: fontCard.selected; name: "check"; size: 16; color: Theme.accentText }
                             }
                         }
                     }
                 }
+            }
 
-                Text {
-                    text: currentLanguage === "zh"
-                        ? "切换界面显示字体"
-                        : "Switch UI display font"
-                    color: _inkDim; font.pixelSize: 12
+            SectionLabel { text: lang === "zh" ? "数据" : "Data" }
+            Card {
+                Layout.fillWidth: true
+                Layout.bottomMargin: 40
+                Layout.preferredHeight: dataRow.implicitHeight
+                SettingRow {
+                    id: dataRow
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    title: lang === "zh" ? "书库与阅读记录" : "Library and reading data"
+                    detail: lang === "zh" ? "保存在本机 ~/.inkverse，不上传" : "Stored locally in ~/.inkverse, never uploaded"
                 }
             }
         }
+    }
 
-        // ── Language Section ──
-        GlassPanel {
-            Layout.fillWidth: true
-            Layout.preferredHeight: langCol.implicitHeight + 50
+    component SectionLabel: Text {
+        Layout.topMargin: 20
+        Layout.bottomMargin: 8
+        Layout.leftMargin: 4
+        color: Theme.textTertiary
+        font.family: Theme.uiFont
+        font.pixelSize: Theme.fontCaption
+        font.weight: Font.DemiBold
+    }
 
-            ColumnLayout {
-                id: langCol
-                anchors.fill: parent; anchors.margins: 25
-                spacing: 16
+    component SettingRow: Item {
+        property string title
+        property string detail: ""
+        default property alias trailing: trailingSlot.data
+        Layout.fillWidth: true
+        Layout.preferredHeight: Math.max(60, labelCol.implicitHeight + 28)
+        implicitHeight: Math.max(60, labelCol.implicitHeight + 28)
 
-                Text {
-                    text: currentLanguage === "zh" ? "语言设置" : "Language"
-                    color: _inkLight
-                    font.pixelSize: 16; font.weight: Font.DemiBold
-                }
-
-                Row {
-                    spacing: 12
-
-                    Rectangle {
-                        width: 120; height: 44; radius: 10
-                        color: root.currentLanguage === "zh" ? "#35a09888" : "#18a09888"
-                        border.color: root.currentLanguage === "zh" ? "#60a09888" : "#30a09888"
-
-                        Text { anchors.centerIn: parent; text: "中文"; color: _ink; font.pixelSize: 15 }
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: { root.currentLanguage = "zh"; root.languageChanged("zh") }
-                        }
-                    }
-
-                    Rectangle {
-                        width: 120; height: 44; radius: 10
-                        color: root.currentLanguage === "en" ? "#35a09888" : "#18a09888"
-                        border.color: root.currentLanguage === "en" ? "#60a09888" : "#30a09888"
-
-                        Text { anchors.centerIn: parent; text: "English"; color: _ink; font.pixelSize: 15 }
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: { root.currentLanguage = "en"; root.languageChanged("en") }
-                        }
-                    }
-                }
-
-                Text {
-                    text: currentLanguage === "zh"
-                        ? "重启应用后生效部分更改"
-                        : "Some changes take effect after restart"
-                    color: _inkDim; font.pixelSize: 12
-                }
-            }
+        Column {
+            id: labelCol
+            anchors.left: parent.left
+            anchors.leftMargin: 16
+            anchors.right: trailingSlot.left
+            anchors.rightMargin: 16
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 2
+            Text { text: title; color: Theme.text; font.family: Theme.uiFont; font.pixelSize: Theme.fontBody }
+            Text { visible: detail !== ""; text: detail; color: Theme.textSecondary; font.family: Theme.uiFont; font.pixelSize: Theme.fontCaption }
         }
-
-        Item { Layout.fillHeight: true }
-
-        // Version info
-        Text {
-            text: "InkVerse v0.1.0"
-            color: _inkDim; opacity: 0.5
-            font.pixelSize: 12
-            Layout.alignment: Qt.AlignHCenter
+        Item {
+            id: trailingSlot
+            anchors.right: parent.right
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            width: childrenRect.width
+            height: childrenRect.height
         }
     }
 }

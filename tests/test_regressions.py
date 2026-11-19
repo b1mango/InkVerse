@@ -171,6 +171,25 @@ class LibraryTests(unittest.TestCase):
         self.assertAlmostEqual(sum(s["minutes"] for s in sessions), 62 / 60)
 
 
+    def test_delete_book_clears_folders_and_annotations(self):
+        book = self.import_text()
+        folder = self.library.create_folder("shelf")[0]
+        self.library.add_book_to_folder(book["id"], folder["id"])
+        self.library.save_annotation(book["id"], -1, 0, 2, "中文", "#E8C547", "")
+        notes = self.library._ann_path(book["id"])
+        self.assertTrue(notes.exists())
+        self.library.delete_book(book["id"])
+        self.assertFalse(notes.exists())
+        self.assertEqual(self.library.list_folders()[0]["book_ids"], [])
+
+    def test_reading_progress_is_clamped_and_kept(self):
+        book = self.import_text()
+        self.library.save_reading_progress(book["id"], 3, 1.7)
+        self.assertEqual(self.library.get_book(book["id"])["progress"], {"chapter": 3, "ratio": 1.0})
+        self.library.save_reading_progress(book["id"], -5, float("nan"))
+        self.assertEqual(self.library.get_book(book["id"])["progress"], {"chapter": -1, "ratio": 0.0})
+
+
 class EncodingTests(unittest.TestCase):
     def test_universal_newlines_for_auto_explicit_and_bom_decoding(self):
         raw_text = "第一段\r\n\r\n第二段\r末段\n"
@@ -237,6 +256,50 @@ class ReadingTests(unittest.TestCase):
         session.end()
         session.end()
         self.assertEqual(saved, [("a", 1.5)])
+
+
+class SettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.base_patch = patch.object(storage, "BASE_DIR", Path(self.temp.name) / "data")
+        self.base_patch.start()
+        self.settings = importlib.import_module("core.settings")
+
+    def tearDown(self):
+        self.base_patch.stop()
+        self.temp.cleanup()
+
+    def test_defaults_without_file(self):
+        loaded = self.settings.load_settings()
+        self.assertEqual(loaded["theme"], "system")
+        self.assertEqual(loaded["reading"]["reading_mode"], "paginated")
+
+    def test_partial_update_merges_and_persists(self):
+        self.settings.save_settings({"theme": "dark"})
+        self.settings.save_settings({"reading": {"font_size": 22, "dual_page": True}})
+        loaded = self.settings.load_settings()
+        self.assertEqual(loaded["theme"], "dark")
+        self.assertEqual(loaded["reading"]["font_size"], 22)
+        self.assertTrue(loaded["reading"]["dual_page"])
+        self.assertEqual(loaded["reading"]["font_family"], "LXGW WenKai")
+
+    def test_invalid_values_fall_back(self):
+        saved = self.settings.save_settings({
+            "theme": "neon", "language": "fr", "unknown": 1,
+            "reading": {"font_size": 99, "reading_mode": "spiral", "dual_page": "yes", "background": "night"},
+        })
+        self.assertEqual(saved["theme"], "system")
+        self.assertEqual(saved["language"], "zh")
+        self.assertNotIn("unknown", saved)
+        self.assertEqual(saved["reading"]["font_size"], 28)
+        self.assertEqual(saved["reading"]["reading_mode"], "paginated")
+        self.assertFalse(saved["reading"]["dual_page"])
+        self.assertEqual(saved["reading"]["background"], "night")
+
+    def test_corrupt_file_reads_as_defaults(self):
+        path = storage.ensure_storage()["metadata"].parent / "settings.json"
+        path.write_text("{not json", encoding="utf-8")
+        self.assertEqual(self.settings.load_settings()["theme"], "system")
 
 
 if __name__ == "__main__":

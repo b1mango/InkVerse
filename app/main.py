@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QFontDatabase, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
 
 _bundle_root = getattr(sys, "_MEIPASS", None)
 ROOT_DIR = Path(_bundle_root) if _bundle_root else Path(__file__).resolve().parent.parent
@@ -46,11 +47,13 @@ from core.library import (
     rename_folder,
     render_pdf_page,
     save_annotation,
+    save_reading_progress,
     set_text_encoding,
     unfetched_books,
     update_annotation,
     update_book,
 )
+from core.settings import load_settings, save_settings
 from core.storage import ensure_storage
 from core.reading import ReadingSession
 from core.text_encoding import decode_text
@@ -265,6 +268,35 @@ class LibraryBackend(QObject):
         if pending:
             self._fetch_covers_async(pending)
 
+    # ── Settings and reading position ────────────────────────────
+
+    @Slot(result="QVariant")
+    def getSettings(self):
+        return load_settings()
+
+    @Slot("QVariant", result="QVariant")
+    def saveSettings(self, patch):
+        try:
+            return save_settings(patch.toVariant() if hasattr(patch, "toVariant") else patch)
+        except (OSError, ValueError):
+            self.storageError.emit("设置保存失败，请检查磁盘空间和写入权限后重试。")
+            return load_settings()
+
+    @Slot(str, result="QVariant")
+    def getReadingProgress(self, bookId: str):
+        book = get_book(bookId) or {}
+        progress = book.get("progress")
+        return progress if isinstance(progress, dict) else {}
+
+    @Slot(str, int, float, result=bool)
+    def saveReadingProgress(self, bookId: str, chapter: int, ratio: float) -> bool:
+        try:
+            save_reading_progress(bookId, chapter, ratio)
+            return True
+        except (OSError, ValueError):
+            self.storageError.emit("阅读位置保存失败，请检查磁盘空间和写入权限后重试。")
+            return False
+
     @Slot(str, result="QVariantList")
     def deleteBook(self, bookId: str):
         delete_book(bookId)
@@ -358,7 +390,10 @@ class LibraryBackend(QObject):
 
 
 def main() -> int:
+    # One custom-drawn control set on every platform, so the design tokens apply everywhere.
+    QQuickStyle.setStyle("Basic")
     app = QGuiApplication(sys.argv)
+    app.setApplicationName("InkVerse")
     engine = QQmlApplicationEngine()
 
     ensure_storage()

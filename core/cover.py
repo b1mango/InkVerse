@@ -42,14 +42,16 @@ def _colors(title: str):
     """Derive two harmonious gradient colours from a title hash."""
     h = int(hashlib.md5(title.encode()).hexdigest(), 16)
     hue1, hue2 = (h % 360) / 360, ((h >> 12) % 360) / 360
-    c1 = tuple(int(c * 255) for c in colorsys.hls_to_rgb(hue1, 0.32, 0.55))
-    c2 = tuple(int(c * 255) for c in colorsys.hls_to_rgb(hue2, 0.18, 0.45))
+    # Muted ink tones so generated covers sit quietly beside real ones
+    c1 = tuple(int(c * 255) for c in colorsys.hls_to_rgb(hue1, 0.34, 0.26))
+    c2 = tuple(int(c * 255) for c in colorsys.hls_to_rgb(hue2, 0.16, 0.22))
     return c1, c2
 
 
 def _font(size: int = 120):
     """Return a font that supports CJK, with a graceful fallback."""
-    for name in ("msyh.ttc", "simhei.ttf", "simsun.ttc", "arial.ttf"):
+    bundled = Path(__file__).resolve().parent.parent / "assets" / "fonts" / "LXGWWenKai-Regular.ttf"
+    for name in (str(bundled), "msyh.ttc", "simhei.ttf", "simsun.ttc", "arial.ttf"):
         try:
             return ImageFont.truetype(name, size)
         except OSError:
